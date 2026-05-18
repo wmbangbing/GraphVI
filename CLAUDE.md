@@ -97,3 +97,49 @@ npx vite --host 0.0.0.0 --port 5173
 ```bash
 cd frontend && npm run build
 ```
+
+## 踩坑记录
+
+### Docker 部署：Import 路径错误
+**症状**：`ModuleNotFoundError: No module named 'database'`
+**原因**：Docker 中 `CMD` 为 `uvicorn backend.main:app`，Python 运行在 `/app` 目录，模块路径为 `backend.main`。但 `main.py` 中写的是 `from database import ...`（无 `backend.` 前缀）。
+**修复**：`deploy/backend/main.py` 使用 `from backend.database import conn_manager`，源文件 `backend/main.py` 保持 `from database import ...`（本地开发从 `backend/` 目录启动）。
+**注意**：修改 `deploy/` 目录的文件，不要改源文件。Docker 构建用 `deploy/` 下的代码。
+
+### Docker 部署：前端 404 Not Found
+**症状**：访问容器根路径 `/` 返回 404，API 路由正常。
+**原因**：`main.py` 缺少静态文件挂载代码 —— 没有 `app.mount("/", StaticFiles(...))`。
+**修复**：在 `main.py` 末尾 API 路由之后添加：
+```python
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+
+dist_path = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if dist_path.exists():
+    app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
+```
+**注意**：API 路由必须在静态文件挂载之前定义（FastAPI 路由优先匹配）。
+
+### 后端查询返回空关系
+**症状**：查询到数据但返回的 `relationships` 为空数组。
+**原因**：使用了 `result.data()` 将 Record 转为 dict，导致 Neo4j Node/Relationship 类型信息丢失，`_parse_graph_data()` 无法识别。
+**修复**：用 `[record async for record in result]` 保留 Neo4j 类型对象。
+
+### 3D 节点渲染异常（只渲染一个节点）
+**原因**：`highlightLinks` 中 `link.source`/`link.target` 在 force-graph 内部被替换为 node 对象引用，与 `graphData()` 后新创建的节点对象引用不匹配。
+**修复**：所有高亮比较改用 string ID（`isLinkHovered()` 函数用 `l.source.id`/`l.target.id` 对比 `hoveredNode.value.id`），移除 `highlightLinks` Set。
+
+### 2D 高亮失效
+**症状**：操作一段时间后 hover 高亮卡死，不消失或不刷新。
+**根因**：`graphData()` 后 force-graph 内部不清除 `state.hoverObj`，且 shadow canvas 有 800ms 节流，加上颜色注册表索引碰撞，导致 `onNodeHover(null)` 不被触发。
+**修复**：在 watch 回调中 `graphData()` 前主动 `hoveredNode.value = null; highlightNodes.clear(); hideTooltip();`。
+
+### 首次渲染图谱偏右
+**症状**：首次加载图谱偏右，全屏后再退出恢复正常。
+**根因**：force-graph 创建 WebGL/Canvas 渲染器时读取 wrapper 的 `clientWidth`，首次挂载时 flex 布局未完成计算，宽度为 0 或偏小，导致 `zoomToFit` 计算偏移。
+**修复**：创建实例后显式 `graphInstance.width(containerRef.clientWidth).height(containerRef.clientHeight)`。
+
+### Element Plus 样式不生效
+**症状**：Element Plus 组件渲染无样式。
+**原因**：只导入了 `element-plus/theme-chalk/dark/css-vars.css`，缺少基础样式 `element-plus/dist/index.css`。
+**修复**：`main.js` 中先导入 `element-plus/dist/index.css`，再导入 dark 变量和自定义覆盖。
