@@ -3,6 +3,8 @@ import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from "vue"
 import ForceGraph2D from "force-graph";
 import ForceGraph3D from "3d-force-graph";
 import * as THREE from "three";
+import SpriteText from "three-spritetext";
+import { markRaw } from "vue";
 import LabelDisplayConfig from "./LabelDisplayConfig.vue";
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
@@ -22,8 +24,8 @@ function getGlowTexture() {
   const ctx = canvas.getContext("2d");
   const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
   g.addColorStop(0, "rgba(255,255,255,1)");
-  g.addColorStop(0.2, "rgba(255,255,255,0.8)");
-  g.addColorStop(0.6, "rgba(255,255,255,0.2)");
+  g.addColorStop(0.25, "rgba(255,255,255,0.9)");
+  g.addColorStop(0.55, "rgba(255,255,255,0.4)");
   g.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
@@ -36,6 +38,7 @@ const props = defineProps({
   nodes: { type: Array, default: () => [] },
   relationships: { type: Array, default: () => [] },
   labelProps: { type: Object, default: () => ({}) },
+  dark: { type: Boolean, default: true },
 });
 
 const emit = defineEmits(["update:labelProps"]);
@@ -44,7 +47,6 @@ const emit = defineEmits(["update:labelProps"]);
 const wrapper2d = ref(null);
 const wrapper3d = ref(null);
 const containerRef = ref(null);
-const tooltipRef = ref(null);
 const mousePos = ref({ x: 0, y: 0 });
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -56,6 +58,9 @@ const layoutMode = ref("default"); // default | compact | spread
 const showNodeLabels = ref(true);
 const showPropPanel = ref(false);
 const perfMode = ref(false);
+const showSearch = ref(false);
+const searchQuery = ref("");
+const tooltipNode = ref(null);
 
 let graphInstance = null;
 
@@ -117,74 +122,144 @@ function buildFreshData() {
 }
 
 const hasData = computed(() => props.nodes.length > 0);
+const graphBg = computed(() => (props.dark ? "#0a0a0f" : "#f5f6fa"));
 
-// ─── Tooltip (fixed at top-right) ────────────────────────────────────────────
-function showTooltip(html) {
-  const el = tooltipRef.value;
-  if (!el) return;
-  el.innerHTML = html;
-  el.style.display = "block";
+// ─── Search ───────────────────────────────────────────────────────────────────
+const searchResults = computed(() => {
+  if (!searchQuery.value || !graphInstance) return [];
+  const q = searchQuery.value.toLowerCase();
+  const data = graphInstance.graphData();
+  if (!data?.nodes) return [];
+  return data.nodes
+    .filter((n) => n.name && n.name.toLowerCase().includes(q))
+    .slice(0, 20);
+});
+
+function focusNode(node) {
+  if (!graphInstance || !node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
+  if (dimension.value === "2d") {
+    graphInstance.centerAt(node.x, node.y, 1000);
+    graphInstance.zoom(2.5, 1500);
+  } else {
+    const z = node.z || 0;
+    graphInstance.cameraPosition(
+      { x: node.x, y: node.y - 25, z: z + 55 },
+      { x: node.x, y: node.y, z },
+      1000
+    );
+  }
+  updateHighlight(node);
+  if (dimension.value === "3d") refresh3DHighlights();
+  showTooltip(node);
+  setTimeout(() => {
+    showSearch.value = false;
+    searchQuery.value = "";
+  }, 2000);
+}
+
+// ─── Tooltip (persistent info panel, top-left) ──────────────────────────────
+// Extract URL from markdown or plain text
+function extractUrl(v) {
+  if (typeof v !== "string") return null;
+  // Markdown image: ![alt](url) or Markdown link: [text](url)
+  const mdMatch = v.match(/!?\[.*?\]\((\S+?)\)/);
+  if (mdMatch) return mdMatch[1];
+  // Plain URL
+  if (v.startsWith("http://") || v.startsWith("https://")) return v;
+  return null;
+}
+
+function isImageUrl(v) {
+  const url = extractUrl(v);
+  return url && /\.(jpg|jpeg|png|gif|webp|svg|bmp)([?#]|$)/i.test(url);
+}
+
+function isVideoUrl(v) {
+  const url = extractUrl(v);
+  return url && /\.(mp4|webm|ogg|mov|avi)([?#]|$)/i.test(url);
+}
+
+function extractMediaUrl(v) {
+  return extractUrl(v);
+}
+
+function isHttpUrl(v) {
+  return !!extractUrl(v);
+}
+
+function showTooltip(node) {
+  tooltipNode.value = node;
 }
 
 function hideTooltip() {
-  if (tooltipRef.value) tooltipRef.value.style.display = "none";
-}
-
-function buildTooltipContent(node) {
-  const label = primaryLabel(node.labels);
-  const p = node.properties || {};
-  const rows = Object.entries(p)
-    .map(([k, v]) => `<tr><td>${k}</td><td>${String(v)}</td></tr>`)
-    .join("");
-  return `
-    <h4>${node.name || label}</h4>
-    <span class="label-tag">${label}</span>
-    <table>${rows}</table>
-  `;
+  tooltipNode.value = null;
 }
 
 // ─── Build 3D node object ────────────────────────────────────────────────────
 function buildNodeObject3D(node) {
   const group = new THREE.Group();
-  const isDimmed = highlightNodes.size > 0 && !highlightNodes.has(node.id);
 
   // Core sphere (white center for brightness)
-  const geom = new THREE.SphereGeometry(0.8, 20, 20);
-  const mat = new THREE.MeshBasicMaterial({
-    color: isDimmed ? node.color : "#ffffff",
+  const coreMat = new THREE.MeshBasicMaterial({
+    color: "#ffffff",
     transparent: true,
-    opacity: isDimmed ? 0.2 : 1,
+    opacity: 1,
   });
-  const sphere = new THREE.Mesh(geom, mat);
-  group.add(sphere);
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(0.8, 20, 20), coreMat));
 
   // Colored inner sphere
-  const geom2 = new THREE.SphereGeometry(0.6, 20, 20);
-  const mat2 = new THREE.MeshBasicMaterial({
+  const innerMat = new THREE.MeshBasicMaterial({
     color: node.color,
     transparent: true,
-    opacity: isDimmed ? 0.2 : 0.7,
+    opacity: 0.7,
   });
-  const sphere2 = new THREE.Mesh(geom2, mat2);
-  group.add(sphere2);
+  group.add(new THREE.Mesh(new THREE.SphereGeometry(0.6, 20, 20), innerMat));
 
   // Glow sprite
-  if (!isDimmed) {
-    const spriteMat = new THREE.SpriteMaterial({
-      map: getGlowTexture(),
-      color: node.color,
-      transparent: true,
-      opacity: 0.9,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    const sprite = new THREE.Sprite(spriteMat);
-    sprite.scale.set(5, 5, 1);
-    group.add(sprite);
-  }
+  const spriteMat = new THREE.SpriteMaterial({
+    map: getGlowTexture(),
+    color: node.color,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(6, 6, 1);
+  group.add(sprite);
 
-  return group;
+  // Hover ring (hidden by default) — TorusGeometry for 360° visibility
+  const ringGeom = new THREE.TorusGeometry(1.2, 0.06, 12, 40);
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: "#ffffff",
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+  });
+  const ring = new THREE.Mesh(ringGeom, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.visible = false;
+  group.add(ring);
+
+  // Store material references for dynamic updates
+  group.userData = { coreMat, innerMat, spriteMat, sprite, ringMat, ring, color: node.color, nodeId: node.id, ringScale: 1 };
+  nodeObjects3D.set(node.id, group);
+
+  // Label sprite (shown/hidden via showNodeLabels)
+  const label = new SpriteText(node.name || "");
+  label.color = props.dark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.85)";
+  label.textHeight = 2.5;
+  label.position.set(0, 3, 0);
+  label.material.depthTest = false;
+  label.visible = showNodeLabels.value;
+  group.userData.label = label;
+  group.add(label);
+
+  return markRaw(group);
 }
+
+// ─── 3D node object tracking for dynamic highlight updates ───────────────────
+const nodeObjects3D = new Map();
 
 // ─── Hover Highlighting ──────────────────────────────────────────────────────
 let highlightNodes = new Set();
@@ -202,6 +277,8 @@ function updateHighlight(node) {
       highlightNodes.add(r.target);
     }
   });
+
+  if (dimension.value === "3d") refresh3DHighlights();
 }
 
 // Check if a link connects to the hovered node (by ID, not object ref)
@@ -213,13 +290,50 @@ function isLinkHovered(l) {
   return sId === id || tId === id;
 }
 
+// ─── Dynamic 3D highlight refresh ───────────────────────────────────────────
+function refresh3DHighlights() {
+  nodeObjects3D.forEach((group) => {
+    const { coreMat, innerMat, spriteMat, sprite, ringMat, ring, color, nodeId } = group.userData;
+    const isHovered = hoveredNode.value?.id === nodeId;
+    const isDimmed = highlightNodes.size > 0 && !highlightNodes.has(nodeId);
+
+    // --- Hovered node ---
+    if (isHovered) {
+      coreMat.color.set("#ffffff");
+      coreMat.opacity = 1;
+      innerMat.color.set("#ffffff");
+      innerMat.opacity = 1;
+      sprite.scale.set(12, 12, 1);
+      spriteMat.opacity = 1;
+      spriteMat.color.set("#ffffff");
+      sprite.visible = true;
+      ringMat.color.set("#6c5ce7");
+      ringMat.opacity = 1;
+      ring.scale.set(1, 1, 1);
+      ring.visible = true;
+      return;
+    }
+
+    // --- Not hovered: default appearance (no dimming in 3D) ---
+    coreMat.color.set("#ffffff");
+    coreMat.opacity = 1;
+    innerMat.color.set(color);
+    innerMat.opacity = 0.7;
+    sprite.scale.set(6, 6, 1);
+    spriteMat.opacity = 0.9;
+    spriteMat.color.set(color);
+    sprite.visible = true;
+    ring.visible = false;
+  });
+}
+
 // ─── Initialize 3D Graph ────────────────────────────────────────────────────
 function init3D(wrapper, data) {
   const isPerf = perfMode.value;
 
   const instance = ForceGraph3D()(wrapper)
     .graphData({ nodes: [], links: [] })
-    .backgroundColor("#0a0a0f")
+    .backgroundColor(graphBg.value)
     .nodeThreeObject((node) => {
       if (isPerf) {
         // Performance mode: single sphere, no glow
@@ -229,7 +343,7 @@ function init3D(wrapper, data) {
       }
       return buildNodeObject3D(node);
     })
-    .nodeThreeObjectExtend(isPerf ? false : true)
+    .nodeThreeObjectExtend(true)
     .nodeRelSize(isPerf ? 2.5 : 3)
     .linkColor((l) => {
       if (hoveredNode.value) {
@@ -253,39 +367,15 @@ function init3D(wrapper, data) {
     .d3VelocityDecay(0.4)
     .onNodeHover((node) => {
       updateHighlight(node);
-      if (node) {
-        showTooltip(buildTooltipContent(node));
-      } else {
-        hideTooltip();
-      }
+      if (node) showTooltip(node);
     })
     .onNodeClick((node) => {
-      showTooltip(buildTooltipContent(node));
+      showTooltip(node);
     })
-    .onBackgroundClick(() => hideTooltip());
-
-  // Custom link color: highlight when hovered (3D)
-  instance.linkColor((l) => {
-    if (hoveredNode.value) {
-      return isLinkHovered(l) ? "#ffffff" : "rgba(255,255,255,0.04)";
-    }
-    const src = typeof l.source === "object" ? l.source : null;
-    return src?.color || "#888888";
-  });
-
-  // Custom node opacity (highlights)
-  instance.nodeThreeObject((node) => {
-    if (perfMode.value) {
-      const geom = new THREE.SphereGeometry(1, 12, 12);
-      const mat = new THREE.MeshBasicMaterial({
-        color: node.color,
-        transparent: true,
-        opacity: highlightNodes.size > 0 && !highlightNodes.has(node.id) ? 0.2 : 1,
-      });
-      return new THREE.Mesh(geom, mat);
-    }
-    return buildNodeObject3D(node);
-  });
+    .onBackgroundClick(() => hideTooltip())
+    .onEngineStop(() => {
+      try { instance.zoomToFit(400, 40); } catch {}
+    });
 
   return instance;
 }
@@ -312,7 +402,7 @@ function applyLayout(instance) {
 function init2D(wrapper, data) {
   const instance = ForceGraph2D()(wrapper)
     .graphData({ nodes: [], links: [] })
-    .backgroundColor("#0a0a0f")
+    .backgroundColor(graphBg.value)
     .nodeRelSize(4)
     .linkColor((l) => {
       if (hoveredNode.value) {
@@ -330,16 +420,15 @@ function init2D(wrapper, data) {
     .d3VelocityDecay(0.4)
     .onNodeHover((node) => {
       updateHighlight(node);
-      if (node) {
-        showTooltip(buildTooltipContent(node));
-      } else {
-        hideTooltip();
-      }
+      if (node) showTooltip(node);
     })
     .onNodeClick((node) => {
-      showTooltip(buildTooltipContent(node));
+      showTooltip(node);
     })
-    .onBackgroundClick(() => hideTooltip());
+    .onBackgroundClick(() => hideTooltip())
+    .onEngineStop(() => {
+      try { instance.zoomToFit(400, 40); } catch {}
+    });
 
   // Custom node rendering with glow + label
   applyLayout(instance);
@@ -368,7 +457,7 @@ function init2D(wrapper, data) {
     ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
     ctx.fillStyle = isDimmed ? node.color + "40" : node.color;
     ctx.fill();
-    ctx.strokeStyle = isDimmed ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.5)";
+    ctx.strokeStyle = isDimmed ? "rgba(255,255,255,0.1)" : (props.dark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.3)");
     ctx.lineWidth = isDimmed ? 0.5 : 1.5;
     ctx.stroke();
 
@@ -378,7 +467,7 @@ function init2D(wrapper, data) {
       ctx.font = `${fontSize}px "Inter", sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillStyle = props.dark ? "rgba(255,255,255,0.7)" : "rgba(0,0,0,0.75)";
       ctx.fillText(label, node.x, node.y + size + 4);
     }
   });
@@ -399,6 +488,14 @@ function initGraph() {
     const fn = dimension.value === "2d" ? init2D : init3D;
     graphInstance = fn(wrapper, data);
 
+    // Explicitly set renderer size to container dimensions — on first mount
+    // the wrapper might not have its final layout width yet, causing zoomToFit
+    // to calculate offsets based on a too-narrow viewport.
+    if (containerRef.value?.clientWidth > 0) {
+      graphInstance.width(containerRef.value.clientWidth);
+      graphInstance.height(containerRef.value.clientHeight);
+    }
+
     graphInstance.graphData(data);
     setTimeout(() => {
       try {
@@ -412,6 +509,7 @@ function initGraph() {
 }
 
 function destroyGraph() {
+  nodeObjects3D.clear();
   if (graphInstance) {
     try {
       if (graphInstance._destructor) graphInstance._destructor();
@@ -460,7 +558,16 @@ function toggleFullscreen() {
 watch(
   () => [props.nodes, props.relationships, props.labelProps],
   () => {
+    // Clear hover state before graphData() — force-graph does not fire
+    // onNodeHover(null) after data replacement due to shadow canvas
+    // throttling (800ms) and color registry index collision, leaving a
+    // stale highlight on the canvas.
+    hoveredNode.value = null;
+    highlightNodes.clear();
+    hideTooltip();
+
     if (graphInstance) {
+      nodeObjects3D.clear();
       try {
         graphInstance.graphData(buildFreshData());
         setTimeout(() => {
@@ -491,6 +598,22 @@ function onMouseMove(e) {
   mousePos.value = { x: e.clientX, y: e.clientY };
 }
 
+// Update graph background and 3D label colors when theme changes
+watch(() => props.dark, () => {
+  if (graphInstance) graphInstance.backgroundColor(graphBg.value);
+  const labelColor = props.dark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.85)";
+  nodeObjects3D.forEach((group) => {
+    if (group.userData.label) group.userData.label.color = labelColor;
+  });
+});
+
+// Toggle 3D node labels
+watch(showNodeLabels, (v) => {
+  nodeObjects3D.forEach((group) => {
+    if (group.userData.label) group.userData.label.visible = v;
+  });
+});
+
 document.addEventListener("fullscreenchange", () => {
   isFullscreen.value = !!document.fullscreenElement;
   if (graphInstance && containerRef.value) {
@@ -516,6 +639,32 @@ document.addEventListener("fullscreenchange", () => {
     <!-- 3D Wrapper -->
     <div v-if="dimension === '3d'" ref="wrapper3d" class="graph-wrapper" />
 
+    <!-- Search bar -->
+    <div v-if="hasData && showSearch" class="graph-search">
+      <el-input
+        v-model="searchQuery"
+        placeholder="搜索节点名称..."
+        size="small"
+        clearable
+        autofocus
+        @keydown.esc="showSearch = false; searchQuery = ''"
+      />
+      <div v-if="searchResults.length > 0" class="search-results">
+        <div
+          v-for="n in searchResults"
+          :key="n.id"
+          class="search-result-item"
+          @click="focusNode(n)"
+        >
+          <span class="search-result-name">{{ n.name }}</span>
+          <span class="search-result-label">{{ primaryLabel(n.labels) }}</span>
+        </div>
+      </div>
+      <div v-else-if="searchQuery && searchResults.length === 0" class="search-results">
+        <div class="search-result-empty">未找到匹配节点</div>
+      </div>
+    </div>
+
     <!-- Controls -->
     <div class="graph-controls">
       <button
@@ -532,9 +681,16 @@ document.addEventListener("fullscreenchange", () => {
         :class="{ active: perfMode }"
         @click="togglePerfMode"
       >Z</button>
-      <!-- Label toggle (2D only) -->
+      <!-- Search -->
       <button
-        v-if="dimension === '2d'"
+        v-if="hasData"
+        :title="showSearch ? '关闭搜索' : '搜索节点'"
+        :class="{ active: showSearch }"
+        @click="showSearch = !showSearch"
+      >S</button>
+      <!-- Label toggle -->
+      <button
+        v-if="hasData"
         :title="showNodeLabels ? '隐藏名称' : '显示名称'"
         :class="{ active: showNodeLabels }"
         @click="showNodeLabels = !showNodeLabels"
@@ -600,8 +756,30 @@ document.addEventListener("fullscreenchange", () => {
       <p>输入 Cypher 查询语句，点击执行渲染图谱</p>
     </div>
 
-    <!-- Tooltip -->
-    <div class="tooltip" ref="tooltipRef" style="display: none" />
+    <!-- Tooltip (persistent info panel) -->
+    <div v-if="tooltipNode" class="tooltip">
+      <div class="tooltip-header">
+        <h4>{{ tooltipNode.name || primaryLabel(tooltipNode.labels) }}</h4>
+        <span class="tooltip-close" @click="hideTooltip">✕</span>
+      </div>
+      <span class="label-tag">{{ primaryLabel(tooltipNode.labels) }}</span>
+      <table>
+        <tr v-for="(v, k) in tooltipNode.properties" :key="k">
+          <td>{{ k }}</td>
+          <td>
+            <img
+              v-if="isImageUrl(v)"
+              :src="extractMediaUrl(v)"
+              class="prop-media"
+              @error="$event.target.style.display = 'none'"
+            />
+            <video v-else-if="isVideoUrl(v)" :src="extractMediaUrl(v)" controls class="prop-media" />
+            <a v-else-if="isHttpUrl(v)" :href="extractMediaUrl(v)" target="_blank" rel="noopener">{{ v }}</a>
+            <template v-else>{{ String(v) }}</template>
+          </td>
+        </tr>
+      </table>
+    </div>
 
     <!-- Hint -->
     <div v-if="hasData" class="graph-hint">

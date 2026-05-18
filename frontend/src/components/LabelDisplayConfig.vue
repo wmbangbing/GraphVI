@@ -8,7 +8,6 @@ const props = defineProps({
 
 const emit = defineEmits(["update:labelProps"]);
 
-// Extract unique labels and their available properties
 const labelConfigs = computed(() => {
   const map = {};
   props.nodes.forEach((n) => {
@@ -30,16 +29,18 @@ function select(label, propName) {
 
 <template>
   <div v-if="labelConfigs.length > 0" class="label-config">
+    <div class="label-config-header">节点显示属性</div>
     <div class="label-config-body">
       <div v-for="cfg in labelConfigs" :key="cfg.label" class="label-config-row">
         <span class="label-name" :title="cfg.label">{{ cfg.label }}</span>
-        <select
-          :value="labelProps[cfg.label] || ''"
-          @change="select(cfg.label, $event.target.value)"
+        <el-select
+          :model-value="labelProps[cfg.label] || ''"
+          size="small"
+          @change="select(cfg.label, $event)"
         >
-          <option value="">默认</option>
-          <option v-for="p in cfg.props" :key="p" :value="p">{{ p }}</option>
-        </select>
+          <el-option label="默认" value="" />
+          <el-option v-for="p in cfg.props" :key="p" :label="p" :value="p" />
+        </el-select>
       </div>
     </div>
   </div>

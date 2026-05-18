@@ -4,6 +4,15 @@ import QueryEditor from "./components/QueryEditor.vue";
 import GraphView from "./components/GraphView.vue";
 import StatusBar from "./components/StatusBar.vue";
 import ConnectionConfig from "./components/ConnectionConfig.vue";
+
+const isDark = ref(localStorage.getItem("theme") !== "light");
+document.documentElement.classList.toggle("dark", isDark.value);
+
+function toggleTheme() {
+  isDark.value = !isDark.value;
+  document.documentElement.classList.toggle("dark", isDark.value);
+  localStorage.setItem("theme", isDark.value ? "dark" : "light");
+}
 const API_BASE = "/api/query";
 const CONNECT_BASE = "/api/connect";
 
@@ -107,13 +116,20 @@ async function testConnection({ uri, username, password, database, onResult }) {
 <template>
   <div class="app">
     <div class="side-panel">
-      <div class="logo">Graph<span>VI</span></div>
-      <ConnectionConfig
-        :config="config"
-        @update:config="Object.assign(config, $event)"
-        @test="testConnection"
-      />
-      <QueryEditor :loading="loading" @execute="executeQuery" />
+      <div class="side-scroll">
+        <div class="logo">
+          <span class="logo-text">Graph<span>VI</span></span>
+          <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'">
+            {{ isDark ? "☀️" : "🌙" }}
+          </button>
+        </div>
+        <ConnectionConfig
+          :config="config"
+          @update:config="Object.assign(config, $event)"
+          @test="testConnection"
+        />
+        <QueryEditor :loading="loading" @execute="executeQuery" />
+      </div>
       <StatusBar
         :status="status"
         :nodes="graphData.nodes.length"
@@ -124,6 +140,7 @@ async function testConnection({ uri, username, password, database, onResult }) {
       :nodes="graphData.nodes"
       :relationships="graphData.relationships"
       :label-props="labelProps"
+      :dark="isDark"
       @update:label-props="labelProps = $event"
     />
   </div>

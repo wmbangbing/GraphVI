@@ -7,9 +7,9 @@ const props = defineProps({
 
 const emit = defineEmits(["update:config", "test"]);
 
-const expanded = ref(false);
+const activeNames = ref([]);
 const testing = ref(false);
-const testResult = ref(null); // { ok: bool, message: str }
+const testResult = ref(null);
 
 async function handleTest() {
   testing.value = true;
@@ -32,53 +32,55 @@ function update(field, value) {
 </script>
 
 <template>
-  <div class="conn-config">
-    <div class="conn-header" @click="expanded = !expanded">
-      <span class="conn-label">数据库连接</span>
-      <span class="conn-toggle">{{ expanded ? "−" : "+" }}</span>
-    </div>
-
-    <div v-if="expanded" class="conn-body">
+  <el-collapse v-model="activeNames" class="conn-config">
+    <el-collapse-item title="数据库连接" name="db">
       <div class="conn-field">
         <label>URI</label>
-        <input
-          type="text"
-          :value="config.uri"
+        <el-input
+          :model-value="config.uri"
           placeholder="bolt://localhost:7687"
-          @input="update('uri', $event.target.value)"
+          size="small"
+          @input="update('uri', $event)"
         />
       </div>
       <div class="conn-field">
         <label>Username</label>
-        <input
-          type="text"
-          :value="config.username"
+        <el-input
+          :model-value="config.username"
           placeholder="neo4j"
-          @input="update('username', $event.target.value)"
+          size="small"
+          @input="update('username', $event)"
         />
       </div>
       <div class="conn-field">
         <label>Password</label>
-        <input
+        <el-input
+          :model-value="config.password"
           type="password"
-          :value="config.password"
           placeholder="password"
-          @input="update('password', $event.target.value)"
+          size="small"
+          show-password
+          @input="update('password', $event)"
         />
       </div>
       <div class="conn-field">
         <label>Database</label>
-        <input
-          type="text"
-          :value="config.database"
+        <el-input
+          :model-value="config.database"
           placeholder="neo4j"
-          @input="update('database', $event.target.value)"
+          size="small"
+          @input="update('database', $event)"
         />
       </div>
 
-      <button class="conn-test-btn" :disabled="testing" @click="handleTest">
-        {{ testing ? "测试中..." : "测试连接" }}
-      </button>
+      <el-button
+        class="conn-test-btn"
+        :loading="testing"
+        size="small"
+        @click="handleTest"
+      >
+        测试连接
+      </el-button>
 
       <div
         v-if="testResult"
@@ -86,6 +88,6 @@ function update(field, value) {
       >
         {{ testResult.message }}
       </div>
-    </div>
-  </div>
+    </el-collapse-item>
+  </el-collapse>
 </template>

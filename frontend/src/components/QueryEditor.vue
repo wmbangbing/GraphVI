@@ -29,18 +29,25 @@ function handleClear() {
 <template>
   <div class="query-editor">
     <label for="cypher-input">Cypher 查询</label>
-    <textarea
+    <el-input
       id="cypher-input"
       v-model="cypher"
       :placeholder="DEFAULT_QUERY"
+      type="textarea"
+      :rows="6"
       spellcheck="false"
       @keydown="handleKeydown"
     />
     <div class="btn-row">
-      <button class="btn-run" :disabled="loading" @click="handleExecute">
-        {{ loading ? "执行中..." : "执行查询" }}
-      </button>
-      <button class="btn-clear" @click="handleClear">清空</button>
+      <el-button
+        class="btn-run"
+        type="primary"
+        :loading="loading"
+        @click="handleExecute"
+      >
+        执行查询
+      </el-button>
+      <el-button class="btn-clear" @click="handleClear">清空</el-button>
     </div>
     <div class="shortcut-hint">Ctrl + Enter 快速执行</div>
   </div>
