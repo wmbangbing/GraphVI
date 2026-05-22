@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, watch } from "vue";
+import { ref, reactive, watch, onMounted } from "vue";
 import QueryEditor from "../components/QueryEditor.vue";
 import GraphView from "../components/GraphView.vue";
 import StatusBar from "../components/StatusBar.vue";
@@ -71,6 +71,23 @@ async function executeQuery(cypher) {
     loading.value = false;
   }
 }
+
+// ─── Preset Quick List ──────────────────────────────────────────────────────
+const presets = ref([]);
+
+async function fetchPresets() {
+  try {
+    const res = await fetch("/api/presets");
+    presets.value = await res.json();
+  } catch {}
+}
+
+function executePreset(preset) {
+  if (!preset.cypher) return;
+  executeQuery(preset.cypher);
+}
+
+onMounted(fetchPresets);
 </script>
 
 <template>
@@ -84,6 +101,20 @@ async function executeQuery(cypher) {
               {{ isDark ? "☀️" : "🌙" }}
             </button>
             <router-link to="/settings" class="settings-link" title="系统设置">⚙️</router-link>
+          </div>
+        </div>
+        <div v-if="presets.length > 0" class="preset-list">
+          <div class="preset-list-header">预设问题</div>
+          <div
+            v-for="p in presets"
+            :key="p.id"
+            class="preset-item"
+            :class="{ disabled: !p.cypher }"
+            :title="p.cypher || '暂无可执行的查询语句'"
+            @click="executePreset(p)"
+          >
+            <span class="preset-question">{{ p.question }}</span>
+            <span v-if="!p.cypher" class="preset-badge">待配置</span>
           </div>
         </div>
         <QueryEditor :loading="loading" @execute="executeQuery" />
