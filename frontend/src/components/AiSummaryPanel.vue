@@ -9,7 +9,7 @@ const props = defineProps({
   visible: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["close", "generate"]);
+const emit = defineEmits(["close"]);
 
 const content = ref("");
 const loading = ref(false);
@@ -31,7 +31,6 @@ watch(() => props.visible, (v) => {
 async function analyze() {
   if (!props.graphData.nodes.length && !props.graphData.relationships.length) return;
 
-  emit("generate");
   loading.value = true;
   error.value = "";
   content.value = "";
@@ -108,11 +107,10 @@ async function analyze() {
 <style scoped>
 .ai-summary-panel {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 520px;
-  max-height: 70%;
+  top: 16px;
+  right: 74px;
+  width: 420px;
+  max-height: 80%;
   display: flex;
   flex-direction: column;
   background: var(--prop-panel-bg);

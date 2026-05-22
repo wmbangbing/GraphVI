@@ -187,6 +187,8 @@ body {
 .preset-list {
   margin-top: 4px;
   margin-bottom: 8px;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .preset-list-header {

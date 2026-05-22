@@ -8,3 +8,5 @@ __pycache__/
 *.pyc
 .claude/
 test_*.json
+.superpowers/
+*.db

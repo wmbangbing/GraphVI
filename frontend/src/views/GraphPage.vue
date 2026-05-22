@@ -149,7 +149,6 @@ onMounted(fetchPresets);
         :graph-data="graphData"
         :visible="showAiSummary"
         @close="closeAiSummary"
-        @generate="closeAiSummary"
       />
     </div>
   </div>
