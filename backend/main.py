@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database import conn_manager
-from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse
+from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -92,8 +92,10 @@ def _parse_graph_data(records: list) -> GraphResponse:
 
 # ─── Presets API ─────────────────────────────────────────────────────────────
 from presets_db import init_db, get_all, create, update as update_preset, delete as delete_preset
+from settings_db import init_settings_table, get_all_settings, set_multiple_settings
 
 init_db()
+init_settings_table()
 
 
 @app.get("/api/presets", response_model=list[PresetResponse])
@@ -119,6 +121,34 @@ async def update_preset_endpoint(preset_id: int, body: PresetUpdate):
 @app.delete("/api/presets/{preset_id}", status_code=204)
 async def delete_preset_endpoint(preset_id: int):
     delete_preset(preset_id)
+
+
+# ─── AI Analyse API ──────────────────────────────────────────────────────────
+from llm_service import call_llm
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze_graph(body: AnalyzeRequest):
+    if not body.nodes and not body.relationships:
+        raise HTTPException(status_code=400, detail="No graph data to analyze")
+    try:
+        summary = await call_llm(body.nodes, body.relationships, body.custom_prompt)
+        return AnalyzeResponse(summary=summary)
+    except Exception as e:
+        logger.warning("AI analyse failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"AI analyse error: {e}")
+
+
+# ─── Settings API ────────────────────────────────────────────────────────────
+@app.get("/api/settings")
+async def list_settings():
+    return get_all_settings()
+
+
+@app.put("/api/settings")
+async def update_settings(body: SettingsUpdate):
+    set_multiple_settings(body.settings)
+    return {"status": "ok"}
 
 
 @app.post("/api/query", response_model=GraphResponse)

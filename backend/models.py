@@ -47,5 +47,19 @@ class PresetResponse(BaseModel):
     updated_at: str
 
 
+class AnalyzeRequest(BaseModel):
+    nodes: list[dict] = []
+    relationships: list[dict] = []
+    custom_prompt: str | None = None
+
+
+class AnalyzeResponse(BaseModel):
+    summary: str
+
+
+class SettingsUpdate(BaseModel):
+    settings: dict[str, str]
+
+
 class ErrorResponse(BaseModel):
     detail: str
