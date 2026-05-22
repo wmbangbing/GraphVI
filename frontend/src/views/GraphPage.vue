@@ -3,6 +3,7 @@ import { ref, reactive, watch, onMounted } from "vue";
 import QueryEditor from "../components/QueryEditor.vue";
 import GraphView from "../components/GraphView.vue";
 import StatusBar from "../components/StatusBar.vue";
+import AiSummaryPanel from "../components/AiSummaryPanel.vue";
 
 const isDark = ref(localStorage.getItem("theme") !== "light");
 document.documentElement.classList.toggle("dark", isDark.value);
@@ -118,6 +119,7 @@ onMounted(fetchPresets);
           </div>
         </div>
         <QueryEditor :loading="loading" @execute="executeQuery" />
+        <AiSummaryPanel :graph-data="graphData" />
       </div>
       <StatusBar
         :status="status"
