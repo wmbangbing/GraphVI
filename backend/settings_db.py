@@ -23,6 +23,10 @@ def init_settings_table():
         "llm_api_key": "",
         "llm_model": "gpt-4o",
         "summary_prompt": "你是一个知识图谱分析助手。以下是一组知识图谱数据，包含节点和关系。请对数据进行分析总结，提炼关键信息、实体关系模式和数据特征。\n\n节点数量: {node_count}\n关系数量: {rel_count}\n\n节点列表:\n{nodes}\n\n关系列表:\n{rels}\n\n请用中文给出分析总结：",
+        "neo4j_uri": "bolt://localhost:7687",
+        "neo4j_username": "neo4j",
+        "neo4j_password": "neo4j@openspg",
+        "neo4j_database": "kmdevelop",
     }
     for key, value in defaults.items():
         conn.execute(

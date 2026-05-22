@@ -6,6 +6,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from neo4j import AsyncGraphDatabase
 
 from backend.database import conn_manager
 from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate
@@ -174,10 +176,36 @@ async def execute_query(body: CypherQuery):
     return _parse_graph_data(records)
 
 
+class ConnectBody(BaseModel):
+    uri: str = "bolt://localhost:7687"
+    username: str = "neo4j"
+    password: str = ""
+    database: str = "neo4j"
+
+
 @app.post("/api/connect")
-async def test_connect():
+async def test_connect(body: ConnectBody, save: bool = False):
     try:
-        records, _ = await conn_manager.run_query(cypher="RETURN 1 AS ok")
+        driver = AsyncGraphDatabase.driver(
+            body.uri,
+            auth=(body.username, body.password),
+            max_connection_lifetime=3600,
+            max_connection_pool_size=10,
+        )
+        async with driver.session(database=body.database) as session:
+            await session.run("RETURN 1 AS ok")
+        await driver.close()
+
+        if save:
+            from backend.settings_db import set_multiple_settings
+            set_multiple_settings({
+                "neo4j_uri": body.uri,
+                "neo4j_username": body.username,
+                "neo4j_password": body.password,
+                "neo4j_database": body.database,
+            })
+            await conn_manager.reconnect()
+
         return {"status": "connected", "message": "Neo4j 连接成功"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {e}")

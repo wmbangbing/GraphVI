@@ -1,6 +1,7 @@
 <script setup>
 import PresetManager from "../components/PresetManager.vue";
 import AiConfigPanel from "../components/AiConfigPanel.vue";
+import Neo4jConfigPanel from "../components/Neo4jConfigPanel.vue";
 </script>
 
 <template>
@@ -22,6 +23,13 @@ import AiConfigPanel from "../components/AiConfigPanel.vue";
           <span>AI 配置</span>
         </template>
         <AiConfigPanel />
+      </el-card>
+
+      <el-card class="settings-card">
+        <template #header>
+          <span>数据库连接</span>
+        </template>
+        <Neo4jConfigPanel />
       </el-card>
     </div>
   </div>
