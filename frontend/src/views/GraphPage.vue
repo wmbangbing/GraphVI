@@ -73,6 +73,16 @@ async function executeQuery(cypher) {
   }
 }
 
+// ─── AI Summary ─────────────────────────────────────────────────────────────
+const showAiSummary = ref(false);
+
+function toggleAiSummary() {
+  showAiSummary.value = !showAiSummary.value;
+}
+
+function closeAiSummary() {
+  showAiSummary.value = false;
+}
 // ─── Preset Quick List ──────────────────────────────────────────────────────
 const presets = ref([]);
 
@@ -133,8 +143,14 @@ onMounted(fetchPresets);
         :label-props="labelProps"
         :dark="isDark"
         @update:label-props="labelProps = $event"
+        @toggle-ai-summary="toggleAiSummary"
       />
-      <AiSummaryPanel :graph-data="graphData" />
+      <AiSummaryPanel
+        :graph-data="graphData"
+        :visible="showAiSummary"
+        @close="closeAiSummary"
+        @generate="closeAiSummary"
+      />
     </div>
   </div>
 </template>

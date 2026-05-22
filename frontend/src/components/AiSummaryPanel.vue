@@ -1,15 +1,16 @@
 <script setup>
-import { ref, watch, nextTick } from "vue";
-import { useNamespace } from "vue-element-plus-x/es/hooks/useNamespace.js";
+import { ref, watch } from "vue";
 import MarkdownIt from "markdown-it";
 
 const md = new MarkdownIt({ html: false, linkify: true });
 
 const props = defineProps({
   graphData: { type: Object, default: () => ({ nodes: [], relationships: [] }) },
+  visible: { type: Boolean, default: false },
 });
 
-const open = ref(false);
+const emit = defineEmits(["close", "generate"]);
+
 const content = ref("");
 const loading = ref(false);
 const error = ref("");
@@ -19,10 +20,18 @@ watch(() => props.graphData, () => {
   error.value = "";
 }, { deep: true });
 
+watch(() => props.visible, (v) => {
+  if (!v) {
+    content.value = "";
+    error.value = "";
+    loading.value = false;
+  }
+});
+
 async function analyze() {
   if (!props.graphData.nodes.length && !props.graphData.relationships.length) return;
 
-  open.value = true;
+  emit("generate");
   loading.value = true;
   error.value = "";
   content.value = "";
@@ -60,131 +69,97 @@ async function analyze() {
     loading.value = false;
   }
 }
-
-function toggle() {
-  open.value = !open.value;
-}
 </script>
 
 <template>
-  <div class="ai-right-panel" :class="{ open }">
-    <!-- Vertical tab -->
-    <div class="ai-tab" @click="toggle">
-      <span>{{ open ? "✕" : "AI" }}</span>
+  <div v-if="visible" class="ai-summary-panel">
+    <div class="ai-summary-header">
+      <span>AI 分析总结</span>
+      <span class="ai-summary-close" @click="$emit('close')">✕</span>
     </div>
 
-    <!-- Panel content -->
-    <div v-if="open" class="ai-panel">
-      <div class="ai-panel-header">
-        <span class="ai-panel-title">AI 分析总结</span>
+    <div class="ai-summary-body">
+      <el-button
+        class="ai-gen-btn"
+        type="primary"
+        size="small"
+        :disabled="graphData.nodes.length === 0 && graphData.relationships.length === 0"
+        :loading="loading"
+        @click="analyze"
+      >
+        {{ loading ? "生成中..." : "生成总结" }}
+      </el-button>
+
+      <div v-if="error" class="ai-summary-error">
+        <el-alert :title="error" type="error" show-icon :closable="false" />
       </div>
 
-      <div class="ai-panel-body">
-        <el-button
-          class="ai-generate-btn"
-          type="primary"
-          size="small"
-          :disabled="graphData.nodes.length === 0 && graphData.relationships.length === 0"
-          :loading="loading"
-          @click="analyze"
-        >
-          {{ loading ? "生成中..." : "生成总结" }}
-        </el-button>
+      <div v-if="content" class="ai-markdown" v-html="content" />
 
-        <div v-if="error" class="ai-error">
-          <el-alert :title="error" type="error" show-icon :closable="false" />
-        </div>
-
-        <div v-if="content || loading" class="ai-result">
-          <!-- eslint-disable vue/no-v-html -->
-          <div v-if="content" class="ai-markdown" v-html="content" />
-          <div v-else class="ai-placeholder">正在等待响应...</div>
-        </div>
-
-        <div v-if="!content && !loading && !error" class="ai-placeholder">
-          点击"生成总结"对当前图谱数据进行分析
-        </div>
+      <div v-if="!content && !loading && !error" class="ai-summary-empty">
+        点击"生成总结"对当前图谱数据进行分析
       </div>
+
+      <div v-if="loading && !content" class="ai-summary-empty">正在等待响应...</div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.ai-right-panel {
-  position: relative;
-  display: flex;
-  flex-shrink: 0;
-}
-
-.ai-tab {
-  width: 32px;
-  min-width: 32px;
-  background: var(--ctrl-bg);
-  border-left: 1px solid var(--ctrl-border);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.2s, color 0.2s;
-  user-select: none;
-  border-radius: 0;
-}
-
-.ai-tab:hover {
-  background: var(--ctrl-hover-bg);
-  color: var(--ctrl-hover-color);
-}
-
-.ai-tab span {
-  writing-mode: vertical-lr;
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 2px;
-  color: var(--ctrl-color);
-}
-
-.ai-tab:hover span {
-  color: var(--ctrl-hover-color);
-}
-
-.ai-panel {
-  width: 360px;
-  min-width: 360px;
-  background: var(--prop-panel-bg);
-  border-left: 1px solid var(--prop-panel-border);
+.ai-summary-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  max-height: 70%;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  background: var(--prop-panel-bg);
+  border: 1px solid var(--prop-panel-border);
+  border-radius: 12px;
+  z-index: 50;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
 }
 
-.ai-panel-header {
-  padding: 14px 16px 10px;
+.ai-summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
   border-bottom: 1px solid var(--panel-border);
 }
 
-.ai-panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
+.ai-summary-close {
+  cursor: pointer;
+  color: #555;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.15s;
 }
 
-.ai-panel-body {
+.ai-summary-close:hover {
+  color: #ec7063;
+}
+
+.ai-summary-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 14px 18px 18px;
 }
 
-.ai-generate-btn {
+.ai-gen-btn {
   width: 100%;
   margin-bottom: 12px;
 }
 
-.ai-error {
+.ai-summary-error {
   margin-bottom: 12px;
-}
-
-.ai-result {
-  min-height: 60px;
 }
 
 .ai-markdown {
@@ -197,7 +172,6 @@ function toggle() {
 .ai-markdown :deep(h1),
 .ai-markdown :deep(h2),
 .ai-markdown :deep(h3) {
-  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
   margin: 16px 0 8px;
@@ -207,9 +181,7 @@ function toggle() {
 .ai-markdown :deep(h2) { font-size: 15px; }
 .ai-markdown :deep(h3) { font-size: 14px; }
 
-.ai-markdown :deep(p) {
-  margin: 0 0 8px;
-}
+.ai-markdown :deep(p) { margin: 0 0 8px; }
 
 .ai-markdown :deep(ul),
 .ai-markdown :deep(ol) {
@@ -217,9 +189,7 @@ function toggle() {
   margin: 0 0 8px;
 }
 
-.ai-markdown :deep(li) {
-  margin-bottom: 4px;
-}
+.ai-markdown :deep(li) { margin-bottom: 4px; }
 
 .ai-markdown :deep(code) {
   font-size: 12px;
@@ -241,11 +211,9 @@ function toggle() {
   padding: 0;
 }
 
-.ai-markdown :deep(strong) {
-  color: var(--text-primary);
-}
+.ai-markdown :deep(strong) { color: var(--text-primary); }
 
-.ai-placeholder {
+.ai-summary-empty {
   font-size: 12px;
   color: var(--text-tertiary);
   text-align: center;

@@ -397,6 +397,7 @@ body {
   display: flex;
   min-width: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .graph-container:fullscreen {
@@ -462,6 +463,20 @@ body {
   height: 1px;
   background: var(--ctrl-border);
   margin: 2px 0;
+}
+
+.ai-ctrl-btn {
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 1px;
+  background: rgba(108, 92, 231, 0.2) !important;
+  color: #6c5ce7 !important;
+  border-color: rgba(108, 92, 231, 0.3) !important;
+}
+
+.ai-ctrl-btn:hover {
+  background: rgba(108, 92, 231, 0.35) !important;
+  color: #fff !important;
 }
 
 .graph-hint {

@@ -6,6 +6,7 @@ import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { markRaw } from "vue";
 import LabelDisplayConfig from "./LabelDisplayConfig.vue";
+import LegendPanel from "./LegendPanel.vue";
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
 const LABEL_COLORS = [
@@ -41,7 +42,7 @@ const props = defineProps({
   dark: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(["update:labelProps"]);
+const emit = defineEmits(["update:labelProps", "toggleAiSummary"]);
 
 // ─── Refs ────────────────────────────────────────────────────────────────────
 const wrapper2d = ref(null);
@@ -57,6 +58,7 @@ const hoveredNode = ref(null);
 const layoutMode = ref("default"); // default | compact | spread
 const showNodeLabels = ref(true);
 const showPropPanel = ref(false);
+const showLegend = ref(false);
 const perfMode = ref(false);
 const showSearch = ref(false);
 const searchQuery = ref("");
@@ -81,6 +83,13 @@ const colorMap = computed(() => {
     if (!map[label]) map[label] = LABEL_COLORS[idx++ % LABEL_COLORS.length];
   });
   return map;
+});
+
+// ─── Legend Data ──────────────────────────────────────────────────────────────
+const legendLabels = computed(() => {
+  return Object.entries(colorMap.value)
+    .map(([label, color]) => ({ label, color }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 });
 
 // ─── Display value helper ────────────────────────────────────────────────────
@@ -729,6 +738,20 @@ document.addEventListener("fullscreenchange", () => {
         :class="{ active: showPropPanel }"
         @click="showPropPanel = !showPropPanel"
       >P</button>
+      <button
+        v-if="hasData"
+        :title="showLegend ? '隐藏图例' : '显示图例'"
+        :class="{ active: showLegend }"
+        @click="showLegend = !showLegend"
+      >L</button>
+      <!-- Separator -->
+      <div v-if="hasData" class="ctrl-sep" />
+      <button
+        v-if="hasData"
+        title="AI 总结"
+        class="ai-ctrl-btn"
+        @click="$emit('toggleAiSummary')"
+      >AI</button>
     </div>
 
     <!-- Floating prop config panel -->
@@ -743,6 +766,13 @@ document.addEventListener("fullscreenchange", () => {
         @update:label-props="$emit('update:labelProps', $event)"
       />
     </div>
+
+    <!-- Floating legend panel -->
+    <LegendPanel
+      v-if="hasData && showLegend"
+      :labels="legendLabels"
+      @close="showLegend = false"
+    />
 
     <!-- Error -->
     <div v-if="graphError" class="overlay" style="pointer-events: none">
