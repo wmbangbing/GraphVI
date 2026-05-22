@@ -145,6 +145,13 @@ function buildFreshData() {
 const hasData = computed(() => props.nodes.length > 0);
 const graphBg = computed(() => (props.dark ? "#0a0a0f" : "#f5f6fa"));
 
+function forceRender2D() {
+  if (dimension.value === "2d" && graphInstance) {
+    const k = graphInstance.zoom();
+    if (k !== null) graphInstance.zoom(k);
+  }
+}
+
 // ─── Search ───────────────────────────────────────────────────────────────────
 const searchResults = computed(() => {
   if (!searchQuery.value || !graphInstance) return [];
@@ -300,6 +307,7 @@ function updateHighlight(node) {
   });
 
   if (dimension.value === "3d") refresh3DHighlights();
+  else forceRender2D();
 }
 
 // Check if a link connects to the hovered node (by ID, not object ref)
@@ -386,12 +394,18 @@ function init3D(wrapper, data) {
     })
     .d3AlphaDecay(0.05)
     .d3VelocityDecay(0.4)
+    .showPointerCursor((d) => !!d)
     .onNodeHover(null)
     .onNodeClick((node) => {
       updateHighlight(node);
       if (node) showTooltip(node);
     })
-    .onBackgroundClick(() => hideTooltip())
+    .onBackgroundClick(() => {
+      highlightNodes.clear();
+      hoveredNode.value = null;
+      if (dimension.value === "3d") refresh3DHighlights();
+      else forceRender2D();
+    })
     .onEngineStop(() => {
       try { instance.zoomToFit(400, 40); } catch {}
     });
@@ -437,12 +451,18 @@ function init2D(wrapper, data) {
     .linkLabel((l) => l.type || "")
     .d3AlphaDecay(0.05)
     .d3VelocityDecay(0.4)
+    .showPointerCursor((d) => !!d)
     .onNodeHover(null)
     .onNodeClick((node) => {
       updateHighlight(node);
       if (node) showTooltip(node);
     })
-    .onBackgroundClick(() => hideTooltip())
+    .onBackgroundClick(() => {
+      highlightNodes.clear();
+      hoveredNode.value = null;
+      if (dimension.value === "3d") refresh3DHighlights();
+      else forceRender2D();
+    })
     .onEngineStop(() => {
       try { instance.zoomToFit(400, 40); } catch {}
     });
