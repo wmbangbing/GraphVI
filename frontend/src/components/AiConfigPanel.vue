@@ -11,6 +11,8 @@ const config = ref({
   summary_prompt: "",
 });
 const saving = ref(false);
+const testing = ref(false);
+const testResult = ref(null);
 
 async function fetchSettings() {
   try {
@@ -24,6 +26,25 @@ async function fetchSettings() {
     };
   } catch {
     ElMessage.error("获取配置失败");
+  }
+}
+
+async function testConnection() {
+  testing.value = true;
+  testResult.value = null;
+  try {
+    const res = await fetch("/api/analyze/test", { method: "POST" });
+    if (res.ok) {
+      const data = await res.json();
+      testResult.value = { ok: true, message: `连接成功: ${data.reply}` };
+    } else {
+      const err = await res.json();
+      testResult.value = { ok: false, message: err.detail || "测试失败" };
+    }
+  } catch (e) {
+    testResult.value = { ok: false, message: `网络错误: ${e.message}` };
+  } finally {
+    testing.value = false;
   }
 }
 
@@ -60,6 +81,10 @@ onMounted(fetchSettings);
         <el-form-item label="模型">
           <el-input v-model="config.llm_model" placeholder="gpt-4o / deepseek-chat" />
         </el-form-item>
+        <el-button size="small" :loading="testing" @click="testConnection">测试模型</el-button>
+        <div v-if="testResult" class="test-result" :class="{ success: testResult.ok, error: !testResult.ok }">
+          {{ testResult.message }}
+        </div>
       </el-form>
     </div>
 
@@ -98,6 +123,25 @@ onMounted(fetchSettings);
   font-size: 11px;
   color: var(--text-tertiary);
   margin: -8px 0 10px 0;
+}
+
+.test-result {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.test-result.success {
+  background: rgba(46, 204, 113, 0.1);
+  color: #58d68d;
+  border: 1px solid rgba(46, 204, 113, 0.15);
+}
+
+.test-result.error {
+  background: rgba(231, 76, 60, 0.1);
+  color: #ec7063;
+  border: 1px solid rgba(231, 76, 60, 0.15);
 }
 
 .config-section-desc code {

@@ -127,7 +127,17 @@ async def delete_preset_endpoint(preset_id: int):
 
 
 # ─── AI Analyse API ──────────────────────────────────────────────────────────
-from llm_service import call_llm_stream
+from llm_service import call_llm_stream, test_llm_connection
+
+
+@app.post("/api/analyze/test")
+async def analyze_test():
+    """Test LLM connection with a simple prompt"""
+    try:
+        reply = await test_llm_connection()
+        return {"status": "ok", "reply": reply}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"LLM test failed: {e}")
 
 
 @app.post("/api/analyze/stream")

@@ -32,6 +32,28 @@ def _build_prompt(template: str, data: dict) -> str:
     return template.format(**data)
 
 
+async def test_llm_connection() -> str:
+    """发送简单消息测试 LLM 连接"""
+    settings = get_all_settings()
+    endpoint = settings.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
+    api_key = settings.get("llm_api_key", "")
+    model = settings.get("llm_model", "gpt-4o")
+
+    messages = [{"role": "user", "content": "回复 OK 即可"}]
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{endpoint}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 10},
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result["choices"][0]["message"]["content"]
+
+
 async def call_llm_stream(nodes: list, relationships: list, custom_prompt: str | None = None):
     """SSE 流式调用 LLM，逐个 token yield"""
     settings = get_all_settings()
