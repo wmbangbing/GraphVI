@@ -788,7 +788,8 @@ body {
 
 /* --- Settings Page --- */
 .settings-page {
-  min-height: 100vh;
+  height: 100vh;
+  overflow-y: auto;
   background: var(--app-bg);
   padding: 24px 32px;
 }

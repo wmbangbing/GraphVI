@@ -71,7 +71,7 @@ onMounted(fetchSettings);
       <el-input
         v-model="config.summary_prompt"
         type="textarea"
-        :rows="8"
+        :rows="12"
         placeholder="输入总结提示词模板"
       />
     </div>
