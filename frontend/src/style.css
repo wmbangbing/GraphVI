@@ -824,5 +824,21 @@ body {
 }
 
 .settings-body {
-  max-width: 960px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.settings-card {
+  margin-bottom: 20px;
+}
+
+.settings-card .el-card__header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 14px 20px;
+}
+
+.settings-card .el-card__body {
+  padding: 20px;
 }
