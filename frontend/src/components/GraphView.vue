@@ -5,7 +5,7 @@ import ForceGraph3D from "3d-force-graph";
 import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { markRaw } from "vue";
-import LabelDisplayConfig from "./LabelDisplayConfig.vue";
+// LabelDisplayConfig merged into panel directly
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
 const LABEL_COLORS = [
@@ -88,6 +88,20 @@ const legendLabels = computed(() => {
   return Object.entries(colorMap.value)
     .map(([label, color]) => ({ label, color }))
     .sort((a, b) => a.label.localeCompare(b.label));
+});
+
+const legendWithProps = computed(() => {
+  const propMap = {};
+  props.nodes.forEach((n) => {
+    const label = primaryLabel(n.labels);
+    if (!propMap[label]) {
+      propMap[label] = { props: Object.keys(n.properties || {}), label };
+    }
+  });
+  return legendLabels.value.map((item) => ({
+    ...item,
+    props: propMap[item.label]?.props || [],
+  }));
 });
 
 // ─── Display value helper ────────────────────────────────────────────────────
@@ -741,30 +755,26 @@ document.addEventListener("fullscreenchange", () => {
       >AI</button>
     </div>
 
-    <!-- Floating panel: legend + node display config -->
+    <!-- Floating panel: legend with inline property selector -->
     <div v-if="hasData && showPropPanel" class="prop-panel">
       <div class="prop-panel-header">
-        图例 & 节点属性
+        图例
         <span class="prop-panel-close" @click="showPropPanel = false">✕</span>
       </div>
-
-      <div class="prop-panel-section">
-        <div class="prop-panel-section-title">图例</div>
-        <div class="legend-inline">
-          <div v-for="item in legendLabels" :key="item.label" class="legend-inline-item">
-            <span class="legend-inline-swatch" :style="{ background: item.color }" />
-            <span>{{ item.label }}</span>
-          </div>
+      <div class="legend-merged">
+        <div v-for="item in legendWithProps" :key="item.label" class="legend-merged-row">
+          <span class="legend-merged-swatch" :style="{ background: item.color }" />
+          <span class="legend-merged-label">{{ item.label }}</span>
+          <el-select
+            :model-value="labelProps[item.label] || ''"
+            size="small"
+            class="legend-merged-select"
+            @change="$emit('update:labelProps', { ...labelProps, [item.label]: $event })"
+          >
+            <el-option label="默认" value="" />
+            <el-option v-for="p in item.props" :key="p" :label="p" :value="p" />
+          </el-select>
         </div>
-      </div>
-
-      <div class="prop-panel-section">
-        <div class="prop-panel-section-title">节点显示属性</div>
-        <LabelDisplayConfig
-          :nodes="props.nodes"
-          :label-props="props.labelProps"
-          @update:label-props="$emit('update:labelProps', $event)"
-        />
       </div>
     </div>
 
