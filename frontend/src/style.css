@@ -392,6 +392,13 @@ body {
   overflow: hidden;
 }
 
+.graph-area {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .graph-container:fullscreen {
   position: fixed;
   inset: 0;

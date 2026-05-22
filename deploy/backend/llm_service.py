@@ -1,3 +1,4 @@
+import json
 import httpx
 
 from backend.settings_db import get_all_settings
@@ -31,7 +32,7 @@ def _build_prompt(template: str, data: dict) -> str:
     return template.format(**data)
 
 
-async def call_llm(nodes: list, relationships: list, custom_prompt: str | None = None) -> str:
+async def call_llm_stream(nodes: list, relationships: list, custom_prompt: str | None = None):
     settings = get_all_settings()
     endpoint = settings.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
     api_key = settings.get("llm_api_key", "")
@@ -47,7 +48,8 @@ async def call_llm(nodes: list, relationships: list, custom_prompt: str | None =
     ]
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
+        async with client.stream(
+            "POST",
             f"{endpoint}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
@@ -58,8 +60,20 @@ async def call_llm(nodes: list, relationships: list, custom_prompt: str | None =
                 "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": 2048,
+                "stream": True,
             },
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if content:
+                        yield content
+                except json.JSONDecodeError:
+                    continue

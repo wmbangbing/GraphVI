@@ -119,7 +119,6 @@ onMounted(fetchPresets);
           </div>
         </div>
         <QueryEditor :loading="loading" @execute="executeQuery" />
-        <AiSummaryPanel :graph-data="graphData" />
       </div>
       <StatusBar
         :status="status"
@@ -127,12 +126,15 @@ onMounted(fetchPresets);
         :relationships="graphData.relationships.length"
       />
     </div>
-    <GraphView
-      :nodes="graphData.nodes"
-      :relationships="graphData.relationships"
-      :label-props="labelProps"
-      :dark="isDark"
-      @update:label-props="labelProps = $event"
-    />
+    <div class="graph-area">
+      <GraphView
+        :nodes="graphData.nodes"
+        :relationships="graphData.relationships"
+        :label-props="labelProps"
+        :dark="isDark"
+        @update:label-props="labelProps = $event"
+      />
+      <AiSummaryPanel :graph-data="graphData" />
+    </div>
   </div>
 </template>

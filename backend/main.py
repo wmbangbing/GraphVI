@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from database import conn_manager
@@ -124,16 +125,22 @@ async def delete_preset_endpoint(preset_id: int):
 
 
 # ─── AI Analyse API ──────────────────────────────────────────────────────────
-from llm_service import call_llm
+from llm_service import call_llm_stream
 
 
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze_graph(body: AnalyzeRequest):
+@app.post("/api/analyze/stream")
+async def analyze_graph_stream(body: AnalyzeRequest):
     if not body.nodes and not body.relationships:
         raise HTTPException(status_code=400, detail="No graph data to analyze")
     try:
-        summary = await call_llm(body.nodes, body.relationships, body.custom_prompt)
-        return AnalyzeResponse(summary=summary)
+        return StreamingResponse(
+            call_llm_stream(body.nodes, body.relationships, body.custom_prompt),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
     except Exception as e:
         logger.warning("AI analyse failed: %s", e)
         raise HTTPException(status_code=500, detail=f"AI analyse error: {e}")
