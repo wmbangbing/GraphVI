@@ -3,17 +3,10 @@ from pydantic import BaseModel
 
 class CypherQuery(BaseModel):
     cypher: str
-    uri: str = "bolt://localhost:7687"
-    username: str = "neo4j"
-    password: str = "password"
-    database: str = "neo4j"
 
 
 class ConnectConfig(BaseModel):
-    uri: str = "bolt://localhost:7687"
-    username: str = "neo4j"
-    password: str = "password"
-    database: str = "neo4j"
+    pass
 
 
 class NodeDTO(BaseModel):
@@ -34,6 +27,24 @@ class RelationshipDTO(BaseModel):
 class GraphResponse(BaseModel):
     nodes: list[NodeDTO]
     relationships: list[RelationshipDTO]
+
+
+class PresetCreate(BaseModel):
+    question: str
+    cypher: str | None = None
+
+
+class PresetUpdate(BaseModel):
+    question: str | None = None
+    cypher: str | None = None
+
+
+class PresetResponse(BaseModel):
+    id: int
+    question: str
+    cypher: str | None = None
+    created_at: str
+    updated_at: str
 
 
 class ErrorResponse(BaseModel):

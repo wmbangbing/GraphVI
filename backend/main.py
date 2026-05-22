@@ -4,11 +4,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.params import Body
 from fastapi.staticfiles import StaticFiles
 
 from database import conn_manager
-from models import CypherQuery, ConnectConfig, GraphResponse, NodeDTO, RelationshipDTO
+from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -91,18 +90,43 @@ def _parse_graph_data(records: list) -> GraphResponse:
     return GraphResponse(nodes=list(nodes_map.values()), relationships=list(rels_map.values()))
 
 
+# ─── Presets API ─────────────────────────────────────────────────────────────
+from presets_db import init_db, get_all, create, update as update_preset, delete as delete_preset
+
+init_db()
+
+
+@app.get("/api/presets", response_model=list[PresetResponse])
+async def list_presets():
+    return get_all()
+
+
+@app.post("/api/presets", response_model=PresetResponse, status_code=201)
+async def create_preset(body: PresetCreate):
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    return create(body.question.strip(), body.cypher)
+
+
+@app.put("/api/presets/{preset_id}", response_model=PresetResponse)
+async def update_preset_endpoint(preset_id: int, body: PresetUpdate):
+    result = update_preset(preset_id, body.question, body.cypher)
+    if not result:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return result
+
+
+@app.delete("/api/presets/{preset_id}", status_code=204)
+async def delete_preset_endpoint(preset_id: int):
+    delete_preset(preset_id)
+
+
 @app.post("/api/query", response_model=GraphResponse)
 async def execute_query(body: CypherQuery):
     if not body.cypher or not body.cypher.strip():
         raise HTTPException(status_code=400, detail="Cypher query cannot be empty")
     try:
-        records, summary = await conn_manager.run_query(
-            cypher=body.cypher,
-            uri=body.uri,
-            username=body.username,
-            password=body.password,
-            database=body.database,
-        )
+        records, summary = await conn_manager.run_query(cypher=body.cypher)
     except Exception as e:
         logger.warning("Query failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Query error: {e}")
@@ -114,15 +138,9 @@ async def execute_query(body: CypherQuery):
 
 
 @app.post("/api/connect")
-async def test_connect(body: ConnectConfig):
+async def test_connect():
     try:
-        records, _ = await conn_manager.run_query(
-            cypher="RETURN 1 AS ok",
-            uri=body.uri,
-            username=body.username,
-            password=body.password,
-            database=body.database,
-        )
+        records, _ = await conn_manager.run_query(cypher="RETURN 1 AS ok")
         return {"status": "connected", "message": "Neo4j 连接成功"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Connection failed: {e}")
