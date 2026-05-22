@@ -1,0 +1,268 @@
+/* Element Plus theme overrides — light (default) and dark */
+/* ─── Light (default) ─── */
+:root {
+  --el-border-color: rgba(0, 0, 0, 0.08);
+  --el-border-color-light: rgba(0, 0, 0, 0.1);
+  --el-border-color-lighter: rgba(0, 0, 0, 0.06);
+  --el-border-color-extra-light: rgba(0, 0, 0, 0.04);
+  --el-border-radius-base: 6px;
+  --el-fill-color: #f0f0f0;
+  --el-fill-color-light: rgba(0, 0, 0, 0.03);
+  --el-fill-color-lighter: #fafafa;
+  --el-fill-color-blank: #f5f5f5;
+  --el-text-color-primary: #303133;
+  --el-text-color-regular: #606266;
+  --el-text-color-secondary: #909399;
+  --el-text-color-placeholder: #c0c4cc;
+  --el-color-primary: #6c5ce7;
+  --el-color-primary-light-3: #8b7ced;
+  --el-color-primary-dark-2: #5a4bd1;
+  --el-color-success: #58d68d;
+  --el-color-warning: #f0c040;
+  --el-color-danger: #ec7063;
+  --el-color-info: #5dade2;
+  --el-input-bg-color: #f5f5f5;
+  --el-input-border-color: rgba(0, 0, 0, 0.08);
+  --el-input-hover-border-color: #6c5ce7;
+  --el-input-focus-border-color: #6c5ce7;
+  --el-input-text-color: #606266;
+  --el-input-placeholder-color: #c0c4cc;
+  --el-input-font-size: 12px;
+  --el-button-bg-color: #6c5ce7;
+  --el-button-border-color: #6c5ce7;
+  --el-button-hover-bg-color: #5a4bd1;
+  --el-button-hover-border-color: #5a4bd1;
+  --el-button-text-color: #fff;
+  --el-select-bg-color: #f5f5f5;
+  --el-select-border-color-hover: #6c5ce7;
+  --el-select-input-focus-border-color: #6c5ce7;
+  --el-collapse-border-color: rgba(0, 0, 0, 0.06);
+  --el-collapse-header-bg-color: transparent;
+  --el-collapse-content-bg-color: transparent;
+  --el-alert-bg-color: transparent;
+  --el-alert-title-font-size: 12px;
+  --el-alert-description-font-size: 12px;
+}
+
+/* ─── Dark ─── */
+.dark {
+  --el-border-color: rgba(255, 255, 255, 0.06);
+  --el-border-color-light: rgba(255, 255, 255, 0.08);
+  --el-border-color-lighter: rgba(255, 255, 255, 0.06);
+  --el-border-color-extra-light: rgba(255, 255, 255, 0.04);
+  --el-fill-color: rgba(0, 0, 0, 0.3);
+  --el-fill-color-light: rgba(255, 255, 255, 0.04);
+  --el-fill-color-lighter: rgba(18, 18, 28, 0.92);
+  --el-fill-color-blank: rgba(0, 0, 0, 0.3);
+  --el-text-color-primary: #e0e0e0;
+  --el-text-color-regular: #ccc;
+  --el-text-color-secondary: #999;
+  --el-text-color-placeholder: #444;
+  --el-input-bg-color: rgba(0, 0, 0, 0.3);
+  --el-input-border-color: rgba(255, 255, 255, 0.06);
+  --el-input-text-color: #ccc;
+  --el-input-placeholder-color: #444;
+  --el-select-bg-color: rgba(0, 0, 0, 0.3);
+  --el-collapse-border-color: rgba(255, 255, 255, 0.06);
+  --el-alert-bg-color: transparent;
+}
+
+/* ─── Remove default Element Plus dark class body background ─── */
+html.dark {
+  background: transparent;
+}
+
+/* ─── el-collapse ─── */
+.el-collapse {
+  --el-collapse-header-height: auto;
+  border: 1px solid var(--el-collapse-border-color);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.el-collapse-item__header {
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--el-text-color-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  height: auto;
+  line-height: normal;
+  border: none;
+  background: transparent !important;
+}
+
+.el-collapse-item__header.is-active {
+  border-bottom: 1px solid var(--el-collapse-border-color);
+}
+
+.el-collapse-item__wrap {
+  border: none;
+  background: transparent !important;
+}
+
+.el-collapse-item__content {
+  padding: 0 12px 12px;
+  font-size: 12px;
+  color: var(--el-text-color-regular);
+  background: transparent !important;
+}
+
+.el-collapse-item__arrow {
+  color: var(--el-text-color-placeholder);
+  font-size: 14px;
+}
+
+/* ─── el-input ─── */
+.el-input__wrapper {
+  background: var(--el-input-bg-color) !important;
+  border: 1px solid var(--el-input-border-color);
+  border-radius: 6px;
+  box-shadow: none !important;
+  padding: 0 10px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.el-input__wrapper:hover,
+.el-input__wrapper.is-focus {
+  border-color: var(--el-input-hover-border-color);
+}
+
+.el-input__inner {
+  color: var(--el-input-text-color);
+  font-size: 12px;
+  height: 32px;
+}
+
+/* ─── el-textarea ─── */
+.el-textarea__wrapper {
+  background: var(--el-input-bg-color) !important;
+  border: 1px solid var(--el-input-border-color);
+  border-radius: 8px;
+  box-shadow: none !important;
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+.el-textarea__wrapper:hover {
+  border-color: var(--el-input-hover-border-color);
+}
+
+.el-textarea__wrapper.is-focus {
+  border-color: var(--el-input-focus-border-color);
+  box-shadow: 0 0 0 3px rgba(108, 92, 231, 0.15) !important;
+}
+
+.el-textarea__inner {
+  color: var(--el-input-text-color);
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 14px;
+  background: transparent;
+  caret-color: var(--el-input-text-color);
+}
+
+/* ─── el-button ─── */
+.el-button {
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #6c5ce7;
+  --el-button-border-color: #6c5ce7;
+  --el-button-hover-bg-color: #5a4bd1;
+  --el-button-hover-border-color: #5a4bd1;
+  --el-button-active-bg-color: #5a4bd1;
+}
+
+.el-button--primary.is-disabled {
+  background: #3d356e !important;
+  border-color: #3d356e !important;
+}
+
+.el-button--primary:active {
+  transform: scale(0.98);
+}
+
+.el-button--default {
+  --el-button-bg-color: var(--el-fill-color);
+  --el-button-border-color: var(--el-border-color);
+  --el-button-text-color: var(--el-text-color-regular);
+  --el-button-hover-bg-color: var(--el-fill-color-light);
+  --el-button-hover-border-color: var(--el-border-color-light);
+  --el-button-hover-text-color: var(--el-text-color-primary);
+}
+
+/* ─── el-select ─── */
+.el-select {
+  --el-select-input-focus-border-color: #6c5ce7;
+}
+
+.el-select .el-input__wrapper {
+  background: var(--el-select-bg-color) !important;
+  min-height: auto;
+}
+
+.el-select-dropdown {
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color);
+  border-radius: 5px;
+}
+
+.el-select-dropdown__item {
+  color: var(--el-text-color-regular);
+  font-size: 11px;
+  font-family: "JetBrains Mono", monospace;
+}
+
+.el-select-dropdown__item.hover {
+  background: rgba(108, 92, 231, 0.15);
+}
+
+.el-select-dropdown__item.selected {
+  color: #6c5ce7;
+  font-weight: 500;
+}
+
+/* ─── el-alert for status bar ─── */
+.el-alert {
+  border-radius: 6px;
+  padding: 8px 12px;
+  align-items: center;
+}
+
+.el-alert--info {
+  background: rgba(52, 152, 219, 0.12);
+  border: 1px solid rgba(52, 152, 219, 0.2);
+  --el-alert-title-color: #5dade2;
+}
+
+.el-alert--success {
+  background: rgba(46, 204, 113, 0.12);
+  border: 1px solid rgba(46, 204, 113, 0.2);
+  --el-alert-title-color: #58d68d;
+}
+
+.el-alert--error {
+  background: rgba(231, 76, 60, 0.12);
+  border: 1px solid rgba(231, 76, 60, 0.2);
+  --el-alert-title-color: #ec7063;
+}
+
+.el-alert__title {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.el-alert__icon {
+  font-size: 14px;
+  margin-right: 6px;
+}
+
+/* Remove default el-input inner-shadow */
+.el-input__wrapper {
+  box-shadow: none !important;
+}

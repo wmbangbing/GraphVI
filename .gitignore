@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+*.tar
+*.tar.gz
+*.log
+__pycache__/
+*.pyc
+.claude/
+test_*.json
