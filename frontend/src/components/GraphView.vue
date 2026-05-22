@@ -6,7 +6,6 @@ import * as THREE from "three";
 import SpriteText from "three-spritetext";
 import { markRaw } from "vue";
 import LabelDisplayConfig from "./LabelDisplayConfig.vue";
-import LegendPanel from "./LegendPanel.vue";
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
 const LABEL_COLORS = [
@@ -58,7 +57,6 @@ const hoveredNode = ref(null);
 const layoutMode = ref("default"); // default | compact | spread
 const showNodeLabels = ref(true);
 const showPropPanel = ref(false);
-const showLegend = ref(false);
 const perfMode = ref(false);
 const showSearch = ref(false);
 const searchQuery = ref("");
@@ -374,12 +372,10 @@ function init3D(wrapper, data) {
     })
     .d3AlphaDecay(0.05)
     .d3VelocityDecay(0.4)
-    .onNodeHover((node) => {
+    .onNodeHover(null)
+    .onNodeClick((node) => {
       updateHighlight(node);
       if (node) showTooltip(node);
-    })
-    .onNodeClick((node) => {
-      showTooltip(node);
     })
     .onBackgroundClick(() => hideTooltip())
     .onEngineStop(() => {
@@ -427,12 +423,10 @@ function init2D(wrapper, data) {
     .linkLabel((l) => l.type || "")
     .d3AlphaDecay(0.05)
     .d3VelocityDecay(0.4)
-    .onNodeHover((node) => {
+    .onNodeHover(null)
+    .onNodeClick((node) => {
       updateHighlight(node);
       if (node) showTooltip(node);
-    })
-    .onNodeClick((node) => {
-      showTooltip(node);
     })
     .onBackgroundClick(() => hideTooltip())
     .onEngineStop(() => {
@@ -734,17 +728,10 @@ document.addEventListener("fullscreenchange", () => {
       </button>
       <button
         v-if="hasData"
-        :title="showPropPanel ? '隐藏属性面板' : '显示属性面板'"
+        :title="showPropPanel ? '隐藏面板' : '显示面板'"
         :class="{ active: showPropPanel }"
         @click="showPropPanel = !showPropPanel"
       >P</button>
-      <button
-        v-if="hasData"
-        :title="showLegend ? '隐藏图例' : '显示图例'"
-        :class="{ active: showLegend }"
-        @click="showLegend = !showLegend"
-      >L</button>
-      <!-- Separator -->
       <div v-if="hasData" class="ctrl-sep" />
       <button
         v-if="hasData"
@@ -754,25 +741,32 @@ document.addEventListener("fullscreenchange", () => {
       >AI</button>
     </div>
 
-    <!-- Floating prop config panel -->
+    <!-- Floating panel: legend + node display config -->
     <div v-if="hasData && showPropPanel" class="prop-panel">
       <div class="prop-panel-header">
-        节点显示属性
+        图例 & 节点属性
         <span class="prop-panel-close" @click="showPropPanel = false">✕</span>
       </div>
-      <LabelDisplayConfig
-        :nodes="props.nodes"
-        :label-props="props.labelProps"
-        @update:label-props="$emit('update:labelProps', $event)"
-      />
-    </div>
 
-    <!-- Floating legend panel -->
-    <LegendPanel
-      v-if="hasData && showLegend"
-      :labels="legendLabels"
-      @close="showLegend = false"
-    />
+      <div class="prop-panel-section">
+        <div class="prop-panel-section-title">图例</div>
+        <div class="legend-inline">
+          <div v-for="item in legendLabels" :key="item.label" class="legend-inline-item">
+            <span class="legend-inline-swatch" :style="{ background: item.color }" />
+            <span>{{ item.label }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="prop-panel-section">
+        <div class="prop-panel-section-title">节点显示属性</div>
+        <LabelDisplayConfig
+          :nodes="props.nodes"
+          :label-props="props.labelProps"
+          @update:label-props="$emit('update:labelProps', $event)"
+        />
+      </div>
+    </div>
 
     <!-- Error -->
     <div v-if="graphError" class="overlay" style="pointer-events: none">
