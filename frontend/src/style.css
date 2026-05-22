@@ -727,3 +727,44 @@ body {
 .tooltip a:hover {
   text-decoration: underline;
 }
+
+/* --- Settings Page --- */
+.settings-page {
+  min-height: 100vh;
+  background: var(--app-bg);
+  padding: 24px 32px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.settings-header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.settings-back {
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+
+.settings-back:hover {
+  background: var(--ctrl-hover-bg);
+  color: var(--ctrl-hover-color);
+}
+
+.settings-body {
+  max-width: 960px;
+}

@@ -1,3 +1,7 @@
+<script setup>
+import PresetManager from "../components/PresetManager.vue";
+</script>
+
 <template>
   <div class="settings-page">
     <header class="settings-header">
@@ -5,7 +9,7 @@
       <h1>系统设置</h1>
     </header>
     <div class="settings-body">
-      <!-- Task 3: PresetManager will go here -->
+      <PresetManager />
     </div>
   </div>
 </template>
