@@ -1,10 +1,10 @@
 import logging
-import os
-from contextlib import asynccontextmanager
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.params import Body
 from fastapi.staticfiles import StaticFiles
 
 from backend.database import conn_manager

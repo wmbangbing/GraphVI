@@ -1,9 +1,11 @@
 import logging
+from pathlib import Path
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.params import Body
+from fastapi.staticfiles import StaticFiles
 
 from database import conn_manager
 from models import CypherQuery, ConnectConfig, GraphResponse, NodeDTO, RelationshipDTO
@@ -129,3 +131,12 @@ async def test_connect(body: ConnectConfig):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+# Mount frontend static files AFTER all API routes (routes take precedence)
+dist_path = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if dist_path.exists():
+    app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
+    logger.info("Serving frontend from %s", dist_path)
+else:
+    logger.warning("Frontend dist not found at %s — API only", dist_path)
