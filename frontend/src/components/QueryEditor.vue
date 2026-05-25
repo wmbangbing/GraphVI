@@ -6,12 +6,19 @@ RETURN n, r, m
 LIMIT 50`;
 
 const props = defineProps({ loading: Boolean });
-const emit = defineEmits(["execute"]);
+const emit = defineEmits(["execute", "executeNL"]);
 
+const mode = ref("cypher");
 const cypher = ref("");
+const nlQuestion = ref("");
 
 function handleExecute() {
-  emit("execute", cypher.value || DEFAULT_QUERY);
+  if (mode.value === "cypher") {
+    emit("execute", cypher.value || DEFAULT_QUERY);
+  } else {
+    if (!nlQuestion.value.trim()) return;
+    emit("executeNL", nlQuestion.value);
+  }
 }
 
 function handleKeydown(e) {
@@ -22,27 +29,49 @@ function handleKeydown(e) {
 }
 
 function handleClear() {
-  cypher.value = "";
+  if (mode.value === "cypher") {
+    cypher.value = "";
+  } else {
+    nlQuestion.value = "";
+  }
 }
 </script>
 
 <template>
   <div class="query-editor">
-    <label for="cypher-input">Cypher 查询</label>
-    <el-input
-      id="cypher-input"
-      v-model="cypher"
-      :placeholder="DEFAULT_QUERY"
-      type="textarea"
-      :rows="6"
-      spellcheck="false"
-      @keydown="handleKeydown"
-    />
+    <div class="qe-tabs">
+      <span :class="{ active: mode === 'cypher' }" @click="mode = 'cypher'">Cypher</span>
+      <span :class="{ active: mode === 'nl' }" @click="mode = 'nl'">自然语言</span>
+    </div>
+
+    <div v-if="mode === 'cypher'">
+      <el-input
+        id="cypher-input"
+        v-model="cypher"
+        :placeholder="DEFAULT_QUERY"
+        type="textarea"
+        :rows="6"
+        spellcheck="false"
+        @keydown="handleKeydown"
+      />
+    </div>
+
+    <div v-else>
+      <el-input
+        v-model="nlQuestion"
+        placeholder="输入自然语言问题，例如：查询所有事件"
+        type="textarea"
+        :rows="4"
+        @keydown="handleKeydown"
+      />
+    </div>
+
     <div class="btn-row">
       <el-button
         class="btn-run"
         type="primary"
         :loading="loading"
+        :disabled="mode === 'nl' && !nlQuestion.trim()"
         @click="handleExecute"
       >
         执行查询
@@ -52,3 +81,31 @@ function handleClear() {
     <div class="shortcut-hint">Ctrl + Enter 快速执行</div>
   </div>
 </template>
+
+<style scoped>
+.qe-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.qe-tabs span {
+  padding: 4px 14px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+}
+
+.qe-tabs span:hover {
+  color: var(--text-secondary);
+}
+
+.qe-tabs span.active {
+  color: #6c5ce7;
+  border-bottom-color: #6c5ce7;
+}
+</style>

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from backend.database import conn_manager
-from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate
+from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -167,6 +167,24 @@ async def list_settings():
 async def update_settings(body: SettingsUpdate):
     set_multiple_settings(body.settings)
     return {"status": "ok"}
+
+
+@app.post("/api/query/nl", response_model=NlQueryResponse)
+async def execute_nl_query(body: NlQueryRequest):
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    from backend.nl2cypher import nl2cypher
+    try:
+        result = await nl2cypher(body.question.strip())
+        graph = _parse_graph_data(result["records"])
+        return NlQueryResponse(
+            nodes=[n.model_dump() for n in graph.nodes],
+            relationships=[r.model_dump() for r in graph.relationships],
+            generated_cypher=result["generated_cypher"],
+        )
+    except Exception as e:
+        logger.warning("NL query failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"NL query error: {e}")
 
 
 @app.post("/api/query", response_model=GraphResponse)

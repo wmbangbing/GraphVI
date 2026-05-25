@@ -1,0 +1,61 @@
+"""Natural language to Cypher query using neo4j-graphrag Text2CypherRetriever"""
+
+from neo4j import GraphDatabase
+from neo4j_graphrag.llm import OpenAILLM
+from neo4j_graphrag.retrievers import Text2CypherRetriever
+
+from backend.settings_db import get_all_settings
+
+_schema_cache = None
+
+
+def _get_schema(driver, database: str) -> str:
+    with driver.session(database=database) as session:
+        labels = sorted(r["label"] for r in session.run("CALL db.labels()"))
+        rels = sorted(r["relationshipType"] for r in session.run("CALL db.relationshipTypes()"))
+    return (
+        f"Node labels: {', '.join(labels)}\n"
+        f"Relationship types: {', '.join(rels)}\n"
+    )
+
+
+def _get_llm():
+    s = get_all_settings()
+    return OpenAILLM(
+        model_name=s.get("llm_model", "gpt-4o"),
+        model_params={"temperature": 0},
+        api_key=s.get("llm_api_key", ""),
+        base_url=s.get("llm_endpoint", "https://api.openai.com/v1") + "/",
+    )
+
+
+async def nl2cypher(question: str) -> dict:
+    global _schema_cache
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "bolt://localhost:7687")
+    user = s.get("neo4j_username", "neo4j")
+    pwd = s.get("neo4j_password", "")
+    db = s.get("neo4j_database", "neo4j")
+
+    sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
+    try:
+        if _schema_cache is None:
+            _schema_cache = _get_schema(sync_driver, db)
+
+        llm = _get_llm()
+        retriever = Text2CypherRetriever(
+            driver=sync_driver,
+            llm=llm,
+            neo4j_schema=_schema_cache,
+            neo4j_database=db,
+        )
+
+        result = retriever.search(query_text=question)
+        generated_cypher = result.metadata.get("cypher", "")
+
+        from backend.database import conn_manager
+        records, _ = await conn_manager.run_query(cypher=generated_cypher)
+
+        return {"generated_cypher": generated_cypher, "records": records or []}
+    finally:
+        sync_driver.close()

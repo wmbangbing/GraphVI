@@ -61,5 +61,15 @@ class SettingsUpdate(BaseModel):
     settings: dict[str, str]
 
 
+class NlQueryRequest(BaseModel):
+    question: str
+
+
+class NlQueryResponse(BaseModel):
+    nodes: list[dict]
+    relationships: list[dict]
+    generated_cypher: str
+
+
 class ErrorResponse(BaseModel):
     detail: str

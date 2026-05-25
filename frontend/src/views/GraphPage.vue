@@ -15,6 +15,7 @@ function toggleTheme() {
 }
 
 const API_BASE = "/api/query";
+const NL_API = "/api/query/nl";
 
 const graphData = ref({ nodes: [], relationships: [] });
 const loading = ref(false);
@@ -73,6 +74,41 @@ async function executeQuery(cypher) {
   }
 }
 
+async function executeNLQuery(question) {
+  loading.value = true;
+  status.type = "info";
+  status.message = "自然语言查询中...";
+  try {
+    const res = await fetch(NL_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      status.type = "error";
+      status.message = err.detail || `请求失败 (${res.status})`;
+      graphData.value = { nodes: [], relationships: [] };
+      return;
+    }
+    const data = await res.json();
+    if (data.nodes.length === 0 && data.relationships.length === 0) {
+      status.type = "info";
+      status.message = `查询成功，但未找到匹配的图谱数据。生成的Cypher: ${data.generated_cypher}`;
+    } else {
+      status.type = "success";
+      status.message = `查询成功 (${data.generated_cypher})`;
+    }
+    graphData.value = { nodes: data.nodes, relationships: data.relationships };
+  } catch (e) {
+    status.type = "error";
+    status.message = `网络错误: ${e.message}`;
+    graphData.value = { nodes: [], relationships: [] };
+  } finally {
+    loading.value = false;
+  }
+}
+
 // ─── AI Summary ─────────────────────────────────────────────────────────────
 const showAiSummary = ref(false);
 
@@ -94,8 +130,11 @@ async function fetchPresets() {
 }
 
 function executePreset(preset) {
-  if (!preset.cypher) return;
-  executeQuery(preset.cypher);
+  if (preset.cypher) {
+    executeQuery(preset.cypher);
+  } else {
+    executeNLQuery(preset.question);
+  }
 }
 
 onMounted(fetchPresets);
@@ -120,15 +159,14 @@ onMounted(fetchPresets);
             v-for="p in presets"
             :key="p.id"
             class="preset-item"
-            :class="{ disabled: !p.cypher }"
-            :title="p.cypher || '暂无可执行的查询语句'"
+            :title="p.cypher || '点击通过自然语言查询'"
             @click="executePreset(p)"
           >
             <span class="preset-question">{{ p.question }}</span>
-            <span v-if="!p.cypher" class="preset-badge">待配置</span>
+            <span v-if="!p.cypher" class="preset-badge">NL</span>
           </div>
         </div>
-        <QueryEditor :loading="loading" @execute="executeQuery" />
+        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" />
       </div>
       <StatusBar
         :status="status"
