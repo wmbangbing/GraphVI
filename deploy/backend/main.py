@@ -238,7 +238,9 @@ async def test_connect(body: ConnectBody, save: bool = False):
                 "neo4j_password": body.password,
                 "neo4j_database": body.database,
             })
+            from backend.nl2cypher import invalidate_schema_cache
             await conn_manager.reconnect()
+            invalidate_schema_cache()
 
         return {"status": "connected", "message": "Neo4j 连接成功"}
     except Exception as e:

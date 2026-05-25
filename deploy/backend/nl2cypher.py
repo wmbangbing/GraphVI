@@ -7,6 +7,13 @@ from neo4j_graphrag.retrievers import Text2CypherRetriever
 from backend.settings_db import get_all_settings
 
 _schema_cache = None
+_schema_cache_db = None
+
+
+def invalidate_schema_cache():
+    global _schema_cache, _schema_cache_db
+    _schema_cache = None
+    _schema_cache_db = None
 
 
 def _get_schema(driver, database: str) -> str:
@@ -94,8 +101,9 @@ async def nl2cypher(question: str) -> dict:
 
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
     try:
-        if _schema_cache is None:
+        if _schema_cache is None or _schema_cache_db != db:
             _schema_cache = _get_schema(sync_driver, db)
+            _schema_cache_db = db
 
         llm = _get_llm()
         examples = _get_examples()
