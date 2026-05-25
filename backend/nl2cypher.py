@@ -10,13 +10,49 @@ _schema_cache = None
 
 
 def _get_schema(driver, database: str) -> str:
+    """Build schema matching neo4j-graphrag format without APOC dependency"""
     with driver.session(database=database) as session:
-        labels = sorted(r["label"] for r in session.run("CALL db.labels()"))
-        rels = sorted(r["relationshipType"] for r in session.run("CALL db.relationshipTypes()"))
-    return (
-        f"Node labels: {', '.join(labels)}\n"
-        f"Relationship types: {', '.join(rels)}\n"
-    )
+        # Node properties: group by label
+        node_rows = list(session.run("CALL db.schema.nodeTypeProperties()"))
+        node_props = {}
+        for row in node_rows:
+            labels = tuple(row["nodeLabels"])
+            if labels not in node_props:
+                node_props[labels] = []
+            node_props[labels].append(f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}")
+
+        # Relationship properties
+        rel_rows = list(session.run("CALL db.schema.relTypeProperties()"))
+        rel_props = {}
+        for row in rel_rows:
+            rt = row["relType"]
+            if rt not in rel_props:
+                rel_props[rt] = []
+            rel_props[rt].append(f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}")
+
+        # Relationship patterns from visualization
+        viz = list(session.run("CALL db.schema.visualization()"))
+        rel_patterns = set()
+        if viz:
+            for rel in viz[0]["relationships"]:
+                start = list(rel.start_node.labels)[0] if rel.start_node.labels else "?"
+                end = list(rel.end_node.labels)[0] if rel.end_node.labels else "?"
+                rel_patterns.add(f"(:{start})-[:{rel.type}]->(:{end})")
+
+    lines = ["Node properties:"]
+    for labels, props in node_props.items():
+        label_name = labels[-1] if len(labels) > 1 else labels[0]
+        lines.append(f"{label_name} {{{', '.join(props)}}}")
+
+    lines.append("\nRelationship properties:")
+    for rt, props in rel_props.items():
+        clean_rt = rt.strip(":`")
+        lines.append(f"{clean_rt} {{{', '.join(props)}}}")
+
+    lines.append("\nThe relationships:")
+    lines.extend(sorted(rel_patterns))
+
+    return "\n".join(lines)
 
 
 def _get_llm():
