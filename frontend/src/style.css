@@ -124,7 +124,7 @@ body {
 .side-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .side-scroll > * + * {
@@ -187,7 +187,7 @@ body {
 .preset-list {
   margin-top: 4px;
   margin-bottom: 8px;
-  max-height: 30vh;
+  max-height: 200px;
   overflow-y: auto;
 }
 

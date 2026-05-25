@@ -172,6 +172,7 @@ onMounted(fetchPresets);
             <router-link to="/settings" class="settings-link" title="系统设置">⚙️</router-link>
           </div>
         </div>
+        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" />
         <div v-if="presets.length > 0" class="preset-list">
           <div class="preset-list-header">预设问题</div>
           <div
@@ -185,7 +186,6 @@ onMounted(fetchPresets);
             <span v-if="!p.cypher" class="preset-badge">NL</span>
           </div>
         </div>
-        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" />
         <QueryHistory :refresh-key="historyRefreshKey" @select="selectHistory" />
       </div>
       <StatusBar
