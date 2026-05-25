@@ -76,6 +76,13 @@ def _parse_graph_data(records: list) -> GraphResponse:
                 walk(value.start_node)
                 walk(value.end_node)
             return
+        # Handle Neo4j Path object (variable-length relationships)
+        if hasattr(value, "nodes") and hasattr(value, "relationships"):
+            for node in value.nodes:
+                walk(node)
+            for rel in value.relationships:
+                walk(rel)
+            return
         if isinstance(value, dict):
             for v in value.values():
                 walk(v)
