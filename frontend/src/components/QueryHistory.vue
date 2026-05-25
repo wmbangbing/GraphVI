@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, watch, onMounted } from "vue";
 import { ElMessageBox, ElMessage } from "element-plus";
 
 const props = defineProps({
@@ -45,6 +45,7 @@ function formatTime(t) {
   return t.slice(5, 16);
 }
 
+watch(() => props.refreshKey, fetchHistory);
 onMounted(fetchHistory);
 </script>
 

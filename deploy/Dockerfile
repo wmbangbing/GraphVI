@@ -2,12 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies
-COPY backend/requirements.txt .
+# Copy application code (use deploy/backend for correct Docker import paths)
+COPY deploy/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY backend/ backend/
+COPY deploy/backend/ backend/
 COPY frontend/dist/ frontend/dist/
 
 EXPOSE 8000

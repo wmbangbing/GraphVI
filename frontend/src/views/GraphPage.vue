@@ -89,11 +89,7 @@ async function saveHistory(item) {
 }
 
 function selectHistory(item) {
-  if (item.type === "nl") {
-    executeNLQuery(item.question);
-  } else {
-    executeQuery(item.cypher);
-  }
+  executeQuery(item.cypher);
 }
 
 async function executeNLQuery(question) {

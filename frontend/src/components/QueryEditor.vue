@@ -6,7 +6,7 @@ RETURN n, r, m
 LIMIT 50`;
 
 const props = defineProps({ loading: Boolean });
-const emit = defineEmits(["execute", "executeNL"]);
+const emit = defineEmits(["execute", "execute-nl"]);
 
 const mode = ref("cypher");
 const cypher = ref("");
@@ -17,7 +17,7 @@ function handleExecute() {
     emit("execute", cypher.value || DEFAULT_QUERY);
   } else {
     if (!nlQuestion.value.trim()) return;
-    emit("executeNL", nlQuestion.value);
+    emit("execute-nl", nlQuestion.value);
   }
 }
 

@@ -784,7 +784,7 @@ document.addEventListener("fullscreenchange", () => {
       <div class="legend-merged">
         <div v-for="item in legendWithProps" :key="item.label" class="legend-merged-row">
           <span class="legend-merged-swatch" :style="{ background: item.color }" />
-          <span class="legend-merged-label">{{ item.label }}</span>
+          <span class="legend-merged-label" :title="item.label">{{ item.label }}</span>
           <el-select
             :model-value="labelProps[item.label] || ''"
             size="small"
