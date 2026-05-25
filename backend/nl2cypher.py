@@ -118,7 +118,7 @@ def _get_examples() -> list[str]:
 
 async def nl2cypher(question: str) -> dict:
     """Convert NL to Cypher, execute, return {generated_cypher, records}"""
-    global _schema_cache
+    global _schema_cache, _schema_cache_db
 
     s = get_all_settings()
     uri = s.get("neo4j_uri", "bolt://localhost:7687")
