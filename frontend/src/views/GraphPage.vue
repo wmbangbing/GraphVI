@@ -41,7 +41,7 @@ watch(
   }
 );
 
-async function executeQuery(cypher) {
+async function executeQuery(cypher, historyMeta) {
   loading.value = true;
   status.type = "info";
   status.message = "查询执行中...";
@@ -67,7 +67,7 @@ async function executeQuery(cypher) {
       status.message = `查询成功`;
     }
     graphData.value = { nodes: data.nodes, relationships: data.relationships };
-    saveHistory({ question: cypher, cypher, type: "cypher" });
+    saveHistory(historyMeta || { question: cypher, cypher, type: "cypher" });
   } catch (e) {
     status.type = "error";
     status.message = `网络错误: ${e.message}`;
@@ -89,7 +89,7 @@ async function saveHistory(item) {
 }
 
 function selectHistory(item) {
-  executeQuery(item.cypher);
+  executeQuery(item.cypher, { question: item.question, cypher: item.cypher, type: item.type });
 }
 
 async function executeNLQuery(question) {
