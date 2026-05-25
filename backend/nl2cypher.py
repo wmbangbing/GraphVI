@@ -10,27 +10,27 @@ _schema_cache = None
 
 
 def _get_schema(driver, database: str) -> str:
-    """Build schema matching neo4j-graphrag format without APOC dependency"""
     with driver.session(database=database) as session:
-        # Node properties: group by label
         node_rows = list(session.run("CALL db.schema.nodeTypeProperties()"))
         node_props = {}
         for row in node_rows:
             labels = tuple(row["nodeLabels"])
             if labels not in node_props:
                 node_props[labels] = []
-            node_props[labels].append(f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}")
+            node_props[labels].append(
+                f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}"
+            )
 
-        # Relationship properties
         rel_rows = list(session.run("CALL db.schema.relTypeProperties()"))
         rel_props = {}
         for row in rel_rows:
             rt = row["relType"]
             if rt not in rel_props:
                 rel_props[rt] = []
-            rel_props[rt].append(f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}")
+            rel_props[rt].append(
+                f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}"
+            )
 
-        # Relationship patterns from visualization
         viz = list(session.run("CALL db.schema.visualization()"))
         rel_patterns = set()
         if viz:
@@ -65,6 +65,22 @@ def _get_llm():
     )
 
 
+def _get_examples() -> list[str]:
+    """Build few-shot examples from presets that have Cypher queries"""
+    try:
+        from presets_db import get_all as get_all_presets
+        presets = get_all_presets()
+        examples = []
+        for p in presets:
+            if p.get("cypher"):
+                examples.append(
+                    f"USER INPUT: '{p['question']}'\nQUERY: {p['cypher']}"
+                )
+        return examples[:10]
+    except Exception:
+        return []
+
+
 async def nl2cypher(question: str) -> dict:
     """Convert NL to Cypher, execute, return {generated_cypher, records}"""
     global _schema_cache
@@ -75,23 +91,31 @@ async def nl2cypher(question: str) -> dict:
     pwd = s.get("neo4j_password", "")
     db = s.get("neo4j_database", "neo4j")
 
+    # Get custom prompt from settings, or use default
+    custom_prompt = s.get("nl_query_prompt", "")
+    if not custom_prompt:
+        custom_prompt = None
+
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
     try:
         if _schema_cache is None:
             _schema_cache = _get_schema(sync_driver, db)
 
         llm = _get_llm()
+        examples = _get_examples()
+
         retriever = Text2CypherRetriever(
             driver=sync_driver,
             llm=llm,
             neo4j_schema=_schema_cache,
+            examples=examples,
+            custom_prompt=custom_prompt,
             neo4j_database=db,
         )
 
         result = retriever.search(query_text=question)
         generated_cypher = result.metadata.get("cypher", "")
 
-        # Re-execute via async driver for consistent parsing
         from database import conn_manager
         records, _ = await conn_manager.run_query(cypher=generated_cypher)
 

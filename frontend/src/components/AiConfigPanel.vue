@@ -9,6 +9,7 @@ const config = ref({
   llm_api_key: "",
   llm_model: "",
   summary_prompt: "",
+  nl_query_prompt: "",
 });
 const saving = ref(false);
 const testing = ref(false);
@@ -23,6 +24,7 @@ async function fetchSettings() {
       llm_api_key: data.llm_api_key || "",
       llm_model: data.llm_model || "",
       summary_prompt: data.summary_prompt || "",
+      nl_query_prompt: data.nl_query_prompt || "",
     };
   } catch {
     ElMessage.error("获取配置失败");
@@ -98,6 +100,19 @@ onMounted(fetchSettings);
         type="textarea"
         :rows="12"
         placeholder="输入总结提示词模板"
+      />
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">NL 查询提示词</h3>
+      <p class="config-section-desc">
+        用于自然语言→Cypher 转换。可用变量：<code>{schema}</code> <code>{examples}</code> <code>{query_text}</code>
+      </p>
+      <el-input
+        v-model="config.nl_query_prompt"
+        type="textarea"
+        :rows="12"
+        placeholder="输入 NL 查询提示词模板"
       />
     </div>
 

@@ -65,6 +65,21 @@ def _get_llm():
     )
 
 
+def _get_examples() -> list[str]:
+    try:
+        from backend.presets_db import get_all as get_all_presets
+        presets = get_all_presets()
+        examples = []
+        for p in presets:
+            if p.get("cypher"):
+                examples.append(
+                    f"USER INPUT: '{p['question']}'\nQUERY: {p['cypher']}"
+                )
+        return examples[:10]
+    except Exception:
+        return []
+
+
 async def nl2cypher(question: str) -> dict:
     global _schema_cache
     s = get_all_settings()
@@ -73,16 +88,24 @@ async def nl2cypher(question: str) -> dict:
     pwd = s.get("neo4j_password", "")
     db = s.get("neo4j_database", "neo4j")
 
+    custom_prompt = s.get("nl_query_prompt", "")
+    if not custom_prompt:
+        custom_prompt = None
+
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
     try:
         if _schema_cache is None:
             _schema_cache = _get_schema(sync_driver, db)
 
         llm = _get_llm()
+        examples = _get_examples()
+
         retriever = Text2CypherRetriever(
             driver=sync_driver,
             llm=llm,
             neo4j_schema=_schema_cache,
+            examples=examples,
+            custom_prompt=custom_prompt,
             neo4j_database=db,
         )
 
