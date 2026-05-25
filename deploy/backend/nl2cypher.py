@@ -16,7 +16,24 @@ def invalidate_schema_cache():
     _schema_cache_db = None
 
 
-def _get_schema(driver, database: str) -> str:
+def _get_label_samples(session, label_name: str) -> dict:
+    try:
+        query = f"MATCH (n) WHERE n:`{label_name}` RETURN n LIMIT 2"
+        rows = list(session.run(query))
+        samples = {}
+        for row in rows:
+            node = row["n"]
+            for k, v in dict(node).items():
+                if k not in samples and v is not None and not str(v).startswith("http"):
+                    val_str = str(v)[:40]
+                    if len(val_str) > 3:
+                        samples[k] = val_str
+        return samples
+    except Exception:
+        return {}
+
+
+def _get_schema(driver, database: str, include_samples: bool = False) -> str:
     with driver.session(database=database) as session:
         node_rows = list(session.run("CALL db.schema.nodeTypeProperties()"))
         node_props = {}
@@ -24,9 +41,9 @@ def _get_schema(driver, database: str) -> str:
             labels = tuple(row["nodeLabels"])
             if labels not in node_props:
                 node_props[labels] = []
-            node_props[labels].append(
-                f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}"
-            )
+            ptype = row["propertyTypes"]
+            ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
+            node_props[labels].append(f"{row['propertyName']}: {ptype_str}")
 
         rel_rows = list(session.run("CALL db.schema.relTypeProperties()"))
         rel_props = {}
@@ -34,9 +51,9 @@ def _get_schema(driver, database: str) -> str:
             rt = row["relType"]
             if rt not in rel_props:
                 rel_props[rt] = []
-            rel_props[rt].append(
-                f"{row['propertyName']}: {row['propertyTypes'][0].replace(' NOT NULL', '')}"
-            )
+            ptype = row["propertyTypes"]
+            ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
+            rel_props[rt].append(f"{row['propertyName']}: {ptype_str}")
 
         viz = list(session.run("CALL db.schema.visualization()"))
         rel_patterns = set()
@@ -46,20 +63,29 @@ def _get_schema(driver, database: str) -> str:
                 end = list(rel.end_node.labels)[0] if rel.end_node.labels else "?"
                 rel_patterns.add(f"(:{start})-[:{rel.type}]->(:{end})")
 
-    lines = ["Node properties:"]
-    for labels, props in node_props.items():
-        label_name = labels[-1] if len(labels) > 1 else labels[0]
-        lines.append(f"{label_name} {{{', '.join(props)}}}")
+        lines = ["Node properties:"]
+        for labels, props in node_props.items():
+            if not labels:
+                continue
+            label_name = labels[-1] if len(labels) > 1 else labels[0]
+            lines.append(f"{label_name} {{{', '.join(props)}}}")
+            if include_samples:
+                samples = _get_label_samples(session, label_name)
+                if samples:
+                    sample_str = ", ".join(f'{k}="{v}"' for k, v in samples.items())
+                    lines.append(f"  Sample: {sample_str}")
 
-    lines.append("\nRelationship properties:")
-    for rt, props in rel_props.items():
-        clean_rt = rt.strip(":`")
-        lines.append(f"{clean_rt} {{{', '.join(props)}}}")
+        lines.append("\nRelationship properties:")
+        for rt, props in rel_props.items():
+            if not rt:
+                continue
+            clean_rt = rt.strip(":`")
+            lines.append(f"{clean_rt} {{{', '.join(props)}}}")
 
-    lines.append("\nThe relationships:")
-    lines.extend(sorted(rel_patterns))
+        lines.append("\nThe relationships:")
+        lines.extend(sorted(rel_patterns))
 
-    return "\n".join(lines)
+        return "\n".join(lines)
 
 
 def _get_llm():
@@ -99,10 +125,12 @@ async def nl2cypher(question: str) -> dict:
     if not custom_prompt:
         custom_prompt = None
 
+    include_samples = s.get("nl_schema_examples", "false") == "true"
+
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
     try:
         if _schema_cache is None or _schema_cache_db != db:
-            _schema_cache = _get_schema(sync_driver, db)
+            _schema_cache = _get_schema(sync_driver, db, include_samples)
             _schema_cache_db = db
 
         llm = _get_llm()

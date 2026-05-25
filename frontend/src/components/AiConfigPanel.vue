@@ -10,6 +10,7 @@ const config = ref({
   llm_model: "",
   summary_prompt: "",
   nl_query_prompt: "",
+  nl_schema_examples: "false",
 });
 const saving = ref(false);
 const testing = ref(false);
@@ -25,6 +26,7 @@ async function fetchSettings() {
       llm_model: data.llm_model || "",
       summary_prompt: data.summary_prompt || "",
       nl_query_prompt: data.nl_query_prompt || "",
+      nl_schema_examples: data.nl_schema_examples || "false",
     };
   } catch {
     ElMessage.error("获取配置失败");
@@ -114,6 +116,15 @@ onMounted(fetchSettings);
         :rows="12"
         placeholder="输入 NL 查询提示词模板"
       />
+      <div class="config-switch">
+        <el-switch
+          v-model="config.nl_schema_examples"
+          active-value="true"
+          inactive-value="false"
+          size="small"
+        />
+        <span>Schema 示例值（为每个标签采样属性值，提高查询准确率）</span>
+      </div>
     </div>
 
     <el-button type="primary" :loading="saving" @click="saveSettings" style="margin-top: 16px">
@@ -157,6 +168,15 @@ onMounted(fetchSettings);
   background: rgba(231, 76, 60, 0.1);
   color: #ec7063;
   border: 1px solid rgba(231, 76, 60, 0.15);
+}
+
+.config-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .config-section-desc code {
