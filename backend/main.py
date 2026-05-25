@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from database import conn_manager
-from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse
+from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, HistoryAddRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,9 +103,11 @@ def _parse_graph_data(records: list) -> GraphResponse:
 # ─── Presets API ─────────────────────────────────────────────────────────────
 from presets_db import init_db, get_all, create, update as update_preset, delete as delete_preset
 from settings_db import init_settings_table, get_all_settings, set_multiple_settings
+from history_db import init_history_table, add_history, get_history, delete_history, clear_history
 
 init_db()
 init_settings_table()
+init_history_table()
 
 
 @app.get("/api/presets", response_model=list[PresetResponse])
@@ -163,6 +165,42 @@ async def analyze_graph_stream(body: AnalyzeRequest):
     except Exception as e:
         logger.warning("AI analyse failed: %s", e)
         raise HTTPException(status_code=500, detail=f"AI analyse error: {e}")
+
+
+# ─── History API ─────────────────────────────────────────────────────────────
+@app.get("/api/history")
+async def list_history(limit: int = 50):
+    from settings_db import get_all_settings
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "")
+    db = s.get("neo4j_database", "")
+    return get_history(uri, db, limit)
+
+
+@app.post("/api/history")
+async def save_history(body: HistoryAddRequest):
+    from settings_db import get_all_settings
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "")
+    db = s.get("neo4j_database", "")
+    add_history(body.question, body.cypher, body.type, uri, db)
+    return {"status": "ok"}
+
+
+@app.delete("/api/history/{history_id}")
+async def delete_history_item(history_id: int):
+    delete_history(history_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/history")
+async def clear_history_all():
+    from settings_db import get_all_settings
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "")
+    db = s.get("neo4j_database", "")
+    clear_history(uri, db)
+    return {"status": "ok"}
 
 
 # ─── Settings API ────────────────────────────────────────────────────────────

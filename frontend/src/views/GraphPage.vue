@@ -4,8 +4,10 @@ import QueryEditor from "../components/QueryEditor.vue";
 import GraphView from "../components/GraphView.vue";
 import StatusBar from "../components/StatusBar.vue";
 import AiSummaryPanel from "../components/AiSummaryPanel.vue";
+import QueryHistory from "../components/QueryHistory.vue";
 
 const isDark = ref(localStorage.getItem("theme") !== "light");
+const historyRefreshKey = ref(0);
 document.documentElement.classList.toggle("dark", isDark.value);
 
 function toggleTheme() {
@@ -65,12 +67,32 @@ async function executeQuery(cypher) {
       status.message = `查询成功`;
     }
     graphData.value = { nodes: data.nodes, relationships: data.relationships };
+    saveHistory({ question: cypher, cypher, type: "cypher" });
   } catch (e) {
     status.type = "error";
     status.message = `网络错误: ${e.message}`;
     graphData.value = { nodes: [], relationships: [] };
   } finally {
     loading.value = false;
+  }
+}
+
+async function saveHistory(item) {
+  try {
+    await fetch("/api/history", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item),
+    });
+    historyRefreshKey.value++;
+  } catch {}
+}
+
+function selectHistory(item) {
+  if (item.type === "nl") {
+    executeNLQuery(item.question);
+  } else {
+    executeQuery(item.cypher);
   }
 }
 
@@ -100,6 +122,7 @@ async function executeNLQuery(question) {
       status.message = `查询成功 (${data.generated_cypher})`;
     }
     graphData.value = { nodes: data.nodes, relationships: data.relationships };
+    saveHistory({ question, cypher: data.generated_cypher, type: "nl" });
   } catch (e) {
     status.type = "error";
     status.message = `网络错误: ${e.message}`;
@@ -167,6 +190,7 @@ onMounted(fetchPresets);
           </div>
         </div>
         <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" />
+        <QueryHistory :refresh-key="historyRefreshKey" @select="selectHistory" />
       </div>
       <StatusBar
         :status="status"
