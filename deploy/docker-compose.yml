@@ -1,0 +1,10 @@
+services:
+  graphvi:
+    image: graphvi:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - GRAPHVI_DB_PATH=/data/presets.db
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

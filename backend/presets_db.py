@@ -1,7 +1,12 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "presets.db")
+_env_db = os.environ.get("GRAPHVI_DB_PATH")
+if _env_db:
+    os.makedirs(os.path.dirname(_env_db), exist_ok=True)
+    DB_PATH = _env_db
+else:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "presets.db")
 
 
 def get_connection():

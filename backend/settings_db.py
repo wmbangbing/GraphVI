@@ -1,7 +1,12 @@
 import sqlite3
 import os
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "presets.db")
+_env_db = os.environ.get("GRAPHVI_DB_PATH")
+if _env_db:
+    os.makedirs(os.path.dirname(_env_db), exist_ok=True)
+    DB_PATH = _env_db
+else:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "presets.db")
 
 
 def get_connection():
@@ -27,7 +32,7 @@ def init_settings_table():
         "neo4j_username": "neo4j",
         "neo4j_password": "adminadmin",
         "neo4j_database": "kmdevelop",
-        "nl_query_prompt": "Task: Generate a Cypher statement for querying a Neo4j knowledge graph.\n\nSchema:\n{schema}\n\nExamples:\n{examples}\n\nUser question:\n{query_text}\n\nRules:\n1. When the user asks for \"all information\" or \"detailed info\" about a specific entity, use variable-length matching [*1..2] to include connected nodes and relationships.\n2. When using variable-length matching, RETURN individual node and relationship variables instead of a path.\n   Example: MATCH (n:Label {prop: 'value'})-[*1..2]-(m) RETURN n, m  — NOT RETURN path\n3. When the user asks about relationships between specific entities, use specific relationship patterns.\n4. For simple listing queries, use basic MATCH with appropriate labels.\n5. ONLY use read-only statements: MATCH, RETURN, WHERE, LIMIT, ORDER BY, SKIP.\n6. NEVER use CREATE, DELETE, SET, MERGE, REMOVE, DETACH.\n7. Use node labels and relationship types from the schema only. Do not invent labels.\n8. Always add LIMIT (default 100).\n9. Return only the Cypher statement, no explanations or markdown.\n\nCypher query:\n",
+        "nl_query_prompt": "Task: Generate a Cypher statement for querying a Neo4j knowledge graph.\n\nSchema:\n{schema}\n\nExamples:\n{examples}\n\nUser question:\n{query_text}\n\nRules:\n1. When the user asks for \"all information\" or \"detailed info\" about a specific entity, use variable-length matching [*1..2] to include connected nodes and relationships.\n2. When using variable-length matching, RETURN individual node and relationship variables instead of a path.\n   Example: MATCH (n:Label {{prop: 'value'}})-[*1..2]-(m) RETURN n, m  — NOT RETURN path\n3. When the user asks about relationships between specific entities, use specific relationship patterns.\n4. For simple listing queries, use basic MATCH with appropriate labels.\n5. ONLY use read-only statements: MATCH, RETURN, WHERE, LIMIT, ORDER BY, SKIP.\n6. NEVER use CREATE, DELETE, SET, MERGE, REMOVE, DETACH.\n7. Use node labels and relationship types from the schema only. Do not invent labels.\n8. Always add LIMIT (default 100).\n9. Return only the Cypher statement, no explanations or markdown.\n\nCypher query:\n",
         "nl_schema_examples": "false",
     }
     for key, value in defaults.items():
