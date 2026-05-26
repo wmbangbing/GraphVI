@@ -71,5 +71,21 @@ class NlQueryResponse(BaseModel):
     generated_cypher: str
 
 
+class HistoryAddRequest(BaseModel):
+    question: str | None = None
+    cypher: str
+    type: str
+
+
+class HistoryResponse(BaseModel):
+    id: int
+    question: str | None = None
+    cypher: str
+    type: str
+    db_uri: str
+    db_name: str
+    created_at: str
+
+
 class ErrorResponse(BaseModel):
     detail: str

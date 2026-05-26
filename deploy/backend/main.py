@@ -33,9 +33,24 @@ app.add_middleware(
 )
 
 
+def _serialize_props(props: dict) -> dict:
+    """Convert Neo4j temporal/spatial types to strings for JSON serialization."""
+    result = {}
+    for k, v in props.items():
+        if isinstance(v, (list, tuple)):
+            result[k] = [str(i) for i in v]
+        elif isinstance(v, dict):
+            result[k] = _serialize_props(v)
+        elif type(v).__module__.startswith("neo4j."):
+            result[k] = str(v)
+        else:
+            result[k] = v
+    return result
+
+
 def _extract_node(node) -> NodeDTO:
     labels = list(node.labels) if hasattr(node, "labels") else (node.get("labels") or [])
-    props = dict(node)
+    props = _serialize_props(dict(node))
     props.pop("elementId", None)
     node_id = str(node.element_id) if hasattr(node, "element_id") else str(id(node))
     caption = props.get("name") or props.get("title") or (list(props.values())[0] if props else "")
@@ -43,7 +58,7 @@ def _extract_node(node) -> NodeDTO:
 
 
 def _extract_relationship(rel) -> RelationshipDTO:
-    props = dict(rel)
+    props = _serialize_props(dict(rel))
     props.pop("elementId", None)
     rel_id = str(rel.element_id) if hasattr(rel, "element_id") else str(id(rel))
     source_id = str(rel.start_node.element_id) if hasattr(rel, "start_node") else str(rel.get("start_node"))
@@ -140,9 +155,10 @@ from backend.llm_service import call_llm_stream, test_llm_connection
 
 
 @app.post("/api/analyze/test")
-async def analyze_test():
+async def analyze_test(body: dict | None = None):
     try:
-        reply = await test_llm_connection()
+        overrides = body or {}
+        reply = await test_llm_connection(overrides or None)
         return {"status": "ok", "reply": reply}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"LLM test failed: {e}")
@@ -238,14 +254,14 @@ async def execute_query(body: CypherQuery):
         raise HTTPException(status_code=400, detail="Cypher query cannot be empty")
     try:
         records, summary = await conn_manager.run_query(cypher=body.cypher)
+        if records:
+            return _parse_graph_data(records)
+        return GraphResponse(nodes=[], relationships=[])
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning("Query failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Query error: {e}")
-
-    if not records:
-        return GraphResponse(nodes=[], relationships=[])
-
-    return _parse_graph_data(records)
 
 
 class ConnectBody(BaseModel):

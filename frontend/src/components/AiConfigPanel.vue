@@ -37,7 +37,15 @@ async function testConnection() {
   testing.value = true;
   testResult.value = null;
   try {
-    const res = await fetch("/api/analyze/test", { method: "POST" });
+    const res = await fetch("/api/analyze/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        llm_endpoint: config.value.llm_endpoint,
+        llm_api_key: config.value.llm_api_key,
+        llm_model: config.value.llm_model,
+      }),
+    });
     if (res.ok) {
       const data = await res.json();
       testResult.value = { ok: true, message: `连接成功: ${data.reply}` };

@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Copy application code (use deploy/backend for correct Docker import paths)
 COPY deploy/backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip config set global.timeout 300 && pip install --no-cache-dir -r requirements.txt
 
 COPY deploy/backend/ backend/
 COPY frontend/dist/ frontend/dist/

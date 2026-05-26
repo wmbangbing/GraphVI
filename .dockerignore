@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Version control
+.git/
+
+# Claude & tools
+.claude/
+.superpowers/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment & secrets
+.env
+
+# Build artifacts (docker save files)
+*.tar
+*.tar.gz
+
+# Docs & source (not needed by deploy/Dockerfile)
+docs/
+frontend/src/
+frontend/public/
+frontend/vite.config.js
+frontend/package.json
+frontend/package-lock.json
+frontend/index.html
+frontend/.gitignore
+
+# Markdown
+*.md
+
+# OS files
+Thumbs.db
+.DS_Store

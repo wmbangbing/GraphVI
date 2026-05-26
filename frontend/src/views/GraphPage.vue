@@ -52,9 +52,13 @@ async function executeQuery(cypher, historyMeta) {
       body: JSON.stringify({ cypher }),
     });
     if (!res.ok) {
-      const err = await res.json();
+      let detail = `请求失败 (${res.status})`;
+      try {
+        const err = await res.json();
+        if (err.detail) detail = err.detail;
+      } catch {}
       status.type = "error";
-      status.message = err.detail || `请求失败 (${res.status})`;
+      status.message = detail;
       graphData.value = { nodes: [], relationships: [] };
       return;
     }
@@ -103,9 +107,13 @@ async function executeNLQuery(question) {
       body: JSON.stringify({ question }),
     });
     if (!res.ok) {
-      const err = await res.json();
+      let detail = `请求失败 (${res.status})`;
+      try {
+        const err = await res.json();
+        if (err.detail) detail = err.detail;
+      } catch {}
       status.type = "error";
-      status.message = err.detail || `请求失败 (${res.status})`;
+      status.message = detail;
       graphData.value = { nodes: [], relationships: [] };
       return;
     }
@@ -150,7 +158,7 @@ async function fetchPresets() {
 
 function executePreset(preset) {
   if (preset.cypher) {
-    executeQuery(preset.cypher);
+    executeQuery(preset.cypher, { question: preset.question, cypher: preset.cypher, type: "cypher" });
   } else {
     executeNLQuery(preset.question);
   }

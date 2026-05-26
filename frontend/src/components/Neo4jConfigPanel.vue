@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive } from "vue";
+import { ref, reactive, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 
 const form = reactive({
@@ -8,8 +8,26 @@ const form = reactive({
   password: "",
   database: "neo4j",
 });
+const loading = ref(false);
 const testing = ref(false);
 const saving = ref(false);
+
+async function loadSettings() {
+  loading.value = true;
+  try {
+    const res = await fetch("/api/settings");
+    if (res.ok) {
+      const s = await res.json();
+      if (s.neo4j_uri) form.uri = s.neo4j_uri;
+      if (s.neo4j_username) form.username = s.neo4j_username;
+      if (s.neo4j_password) form.password = s.neo4j_password;
+      if (s.neo4j_database) form.database = s.neo4j_database;
+    }
+  } catch {}
+  finally { loading.value = false; }
+}
+
+onMounted(loadSettings);
 
 async function testConnection() {
   testing.value = true;

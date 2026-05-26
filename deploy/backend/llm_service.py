@@ -32,11 +32,16 @@ def _build_prompt(template: str, data: dict) -> str:
     return template.format(**data)
 
 
-async def test_llm_connection() -> str:
-    settings = get_all_settings()
-    endpoint = settings.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
-    api_key = settings.get("llm_api_key", "")
-    model = settings.get("llm_model", "gpt-4o")
+async def test_llm_connection(config_override: dict | None = None) -> str:
+    if config_override:
+        endpoint = config_override.get("llm_endpoint", "").rstrip("/")
+        api_key = config_override.get("llm_api_key", "")
+        model = config_override.get("llm_model", "gpt-4o")
+    else:
+        settings = get_all_settings()
+        endpoint = settings.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
+        api_key = settings.get("llm_api_key", "")
+        model = settings.get("llm_model", "gpt-4o")
 
     messages = [{"role": "user", "content": "回复 OK 即可"}]
     async with httpx.AsyncClient(timeout=30.0) as client:
