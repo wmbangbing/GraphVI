@@ -22,8 +22,7 @@ watch(() => props.graphData, () => {
 
 watch(() => props.visible, (v) => {
   if (!v) {
-    content.value = "";
-    error.value = "";
+    // keep content for reopen, only reset loading/error
     loading.value = false;
   }
 });
@@ -71,7 +70,7 @@ async function analyze() {
 </script>
 
 <template>
-  <div v-if="visible" class="ai-summary-panel">
+  <div v-show="visible" class="ai-summary-panel">
     <div class="ai-summary-header">
       <span>AI 分析总结</span>
       <span class="ai-summary-close" @click="$emit('close')">✕</span>
