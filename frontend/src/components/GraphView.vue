@@ -14,15 +14,20 @@ const LABEL_COLORS = [
   "#00cec9", "#ff7675", "#74b9ff", "#55efc4",
 ];
 
+// ─── Shared geometries (one copy in GPU memory for all nodes) ───────────────
+const CORE_SPHERE_GEOM = new THREE.SphereGeometry(0.8, 20, 20);
+const INNER_SPHERE_GEOM = new THREE.SphereGeometry(0.6, 20, 20);
+const RING_GEOM = new THREE.TorusGeometry(1.2, 0.06, 12, 40);
+
 // ─── Glow Texture (shared across 3D nodes) ──────────────────────────────────
 let glowTexture = null;
 function getGlowTexture() {
   if (glowTexture) return glowTexture;
   const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
+  canvas.width = 64;
+  canvas.height = 64;
   const ctx = canvas.getContext("2d");
-  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
   g.addColorStop(0, "rgba(255,255,255,1)");
   g.addColorStop(0.25, "rgba(255,255,255,0.9)");
   g.addColorStop(0.55, "rgba(255,255,255,0.4)");
@@ -233,7 +238,7 @@ function buildNodeObject3D(node) {
     transparent: true,
     opacity: 1,
   });
-  group.add(new THREE.Mesh(new THREE.SphereGeometry(0.8, 20, 20), coreMat));
+  group.add(new THREE.Mesh(CORE_SPHERE_GEOM, coreMat));
 
   // Colored inner sphere
   const innerMat = new THREE.MeshBasicMaterial({
@@ -241,7 +246,7 @@ function buildNodeObject3D(node) {
     transparent: true,
     opacity: 0.7,
   });
-  group.add(new THREE.Mesh(new THREE.SphereGeometry(0.6, 20, 20), innerMat));
+  group.add(new THREE.Mesh(INNER_SPHERE_GEOM, innerMat));
 
   // Glow sprite
   const spriteMat = new THREE.SpriteMaterial({
@@ -257,14 +262,13 @@ function buildNodeObject3D(node) {
   group.add(sprite);
 
   // Hover ring (hidden by default) — TorusGeometry for 360° visibility
-  const ringGeom = new THREE.TorusGeometry(1.2, 0.06, 12, 40);
   const ringMat = new THREE.MeshBasicMaterial({
     color: "#ffffff",
     transparent: true,
     opacity: 0,
     depthWrite: false,
   });
-  const ring = new THREE.Mesh(ringGeom, ringMat);
+  const ring = new THREE.Mesh(RING_GEOM, ringMat);
   ring.rotation.x = Math.PI / 2;
   ring.visible = false;
   group.add(ring);
@@ -278,7 +282,10 @@ function buildNodeObject3D(node) {
   label.color = props.dark ? "rgba(255,255,255,0.9)" : "rgba(0,0,0,0.85)";
   label.textHeight = 2.5;
   label.position.set(0, 3, 0);
+  // Ensure label always renders on top: ignore depth buffer + highest render order
   label.material.depthTest = false;
+  label.material.depthWrite = false;
+  label.renderOrder = Infinity;
   label.visible = showNodeLabels.value;
   group.userData.label = label;
   group.add(label);
@@ -376,16 +383,16 @@ function init3D(wrapper, data) {
     .nodeRelSize(isPerf ? 2.5 : 3)
     .linkColor((l) => {
       if (hoveredNode.value) {
-        return isLinkHovered(l) ? "#ffffff" : "rgba(255,255,255,0.04)";
+        return isLinkHovered(l) ? "#ffffff" : "rgba(255,255,255,0.12)";
       }
       const src = typeof l.source === "object" ? l.source : null;
       return src?.color || "#888888";
     })
-    .linkWidth(0.4)
+    .linkWidth(0.3)
     .linkCurvature(0)
     .linkDirectionalArrowLength(isPerf ? 0 : 2)
     .linkDirectionalArrowRelPos(0.99)
-    .linkDirectionalParticles(isPerf ? 0 : 3)
+    .linkDirectionalParticles(isPerf ? 0 : 1)
     .linkDirectionalParticleSpeed(0.01)
     .linkDirectionalParticleWidth(1.5)
     .linkDirectionalParticleColor((l) => {
@@ -546,6 +553,16 @@ function initGraph() {
 }
 
 function destroyGraph() {
+  // Dispose GPU resources before clearing references
+  nodeObjects3D.forEach((group) => {
+    group.traverse((child) => {
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) {
+        if (child.material.map) child.material.map.dispose();
+        child.material.dispose();
+      }
+    });
+  });
   nodeObjects3D.clear();
   if (graphInstance) {
     try {

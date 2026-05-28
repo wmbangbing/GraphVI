@@ -87,5 +87,13 @@ class HistoryResponse(BaseModel):
     created_at: str
 
 
+class Nl2CypherRequest(BaseModel):
+    question: str
+
+
+class Nl2CypherResponse(BaseModel):
+    cypher: str
+
+
 class ErrorResponse(BaseModel):
     detail: str

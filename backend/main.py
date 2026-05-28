@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from database import conn_manager
-from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, HistoryAddRequest
+from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -247,6 +247,20 @@ async def execute_nl_query(body: NlQueryRequest):
     except Exception as e:
         logger.warning("NL query failed: %s", e)
         raise HTTPException(status_code=500, detail=f"NL query error: {e}")
+
+
+@app.post("/api/nl2cypher", response_model=Nl2CypherResponse)
+def nl2cypher_api(body: Nl2CypherRequest):
+    """Generate Cypher from natural language, return only the Cypher statement."""
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    from nl2cypher import generate_cypher_only
+    try:
+        cypher = generate_cypher_only(body.question.strip())
+        return Nl2CypherResponse(cypher=cypher)
+    except Exception as e:
+        logger.warning("NL2Cypher failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"NL2Cypher error: {e}")
 
 
 @app.post("/api/query", response_model=GraphResponse)

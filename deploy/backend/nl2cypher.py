@@ -154,3 +154,45 @@ async def nl2cypher(question: str) -> dict:
         return {"generated_cypher": generated_cypher, "records": records or []}
     finally:
         sync_driver.close()
+
+
+def generate_cypher_only(question: str) -> str:
+    """Generate Cypher from natural language WITHOUT executing.
+
+    Returns the Cypher statement only, for third-party API consumption.
+    """
+    global _schema_cache, _schema_cache_db
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "bolt://localhost:7687")
+    user = s.get("neo4j_username", "neo4j")
+    pwd = s.get("neo4j_password", "")
+    db = s.get("neo4j_database", "neo4j")
+
+    custom_prompt = s.get("nl_query_prompt", "")
+    if not custom_prompt:
+        custom_prompt = None
+
+    include_samples = s.get("nl_schema_examples", "false") == "true"
+
+    sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
+    try:
+        if _schema_cache is None or _schema_cache_db != db:
+            _schema_cache = _get_schema(sync_driver, db, include_samples)
+            _schema_cache_db = db
+
+        llm = _get_llm()
+        examples = _get_examples()
+
+        retriever = Text2CypherRetriever(
+            driver=sync_driver,
+            llm=llm,
+            neo4j_schema=_schema_cache,
+            examples=examples,
+            custom_prompt=custom_prompt,
+            neo4j_database=db,
+        )
+
+        result = retriever.search(query_text=question)
+        return result.metadata.get("cypher", "")
+    finally:
+        sync_driver.close()
