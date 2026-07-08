@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
@@ -23,6 +23,24 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="GraphVI API", version="1.0.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def strip_prefix_middleware(request, call_next):
+    """Strip deployment subpath prefix from API requests.
+
+    When Nginx proxies /<prefix>/api/xxx to the backend, the path arrives
+    as /<prefix>/api/xxx, which doesn't match any API route. This middleware
+    rewrites /<prefix>/api/xxx → /api/xxx before routing.
+    """
+    path = request.url.path
+    if path.count("/") >= 3 and "/api/" in path:
+        api_idx = path.index("/api/")
+        if api_idx > 0:
+            request.scope["path"] = path[api_idx:]
+            request.scope["root_path"] = ""
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -321,10 +339,26 @@ async def health():
     return {"status": "ok"}
 
 
-# Mount frontend static files AFTER all API routes (routes take precedence)
+# Serve frontend static files with SPA fallback for Vue Router routes.
+# Must be defined AFTER all API routes so they take precedence.
+# Catch-all route: serve matching file, or index.html for SPA routing.
 dist_path = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if dist_path.exists():
-    app.mount("/", StaticFiles(directory=str(dist_path), html=True), name="frontend")
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        # Try direct path, then strip subpath prefixes (for /graphvi/assets/xxx → /assets/xxx)
+        target = dist_path / full_path if full_path else dist_path
+        if target.is_file():
+            return FileResponse(target)
+        slash = full_path.find("/")
+        if slash > 0:
+            alt = dist_path / full_path[slash + 1:]
+            if alt.is_file():
+                return FileResponse(alt)
+        return FileResponse(dist_path / "index.html")
+
     logger.info("Serving frontend from %s", dist_path)
 else:
     logger.warning("Frontend dist not found at %s — API only", dist_path)

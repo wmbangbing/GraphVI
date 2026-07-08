@@ -35,7 +35,7 @@ async function analyze() {
   content.value = "";
 
   try {
-    const res = await fetch("/api/analyze/stream", {
+    const res = await fetch((window.__API_BASE__ || "") + "/api/analyze/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

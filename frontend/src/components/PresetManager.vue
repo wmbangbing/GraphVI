@@ -2,7 +2,7 @@
 import { ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 
-const API_BASE = "/api/presets";
+const API_BASE = () => (window.__API_BASE__ || "") + "/api/presets";
 
 const presets = ref([]);
 const dialogVisible = ref(false);
@@ -12,7 +12,7 @@ const editingId = ref(null);
 
 async function fetchPresets() {
   try {
-    const res = await fetch(API_BASE);
+    const res = await fetch(API_BASE());
     presets.value = await res.json();
   } catch {
     ElMessage.error("获取预设列表失败");
@@ -40,7 +40,7 @@ async function handleSave() {
   }
   try {
     if (editingId.value) {
-      await fetch(`${API_BASE}/${editingId.value}`, {
+      await fetch(`${API_BASE()}/${editingId.value}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -50,7 +50,7 @@ async function handleSave() {
       });
       ElMessage.success("更新成功");
     } else {
-      await fetch(API_BASE, {
+      await fetch(API_BASE(), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -69,7 +69,7 @@ async function handleSave() {
 
 async function handleDelete(preset) {
   try {
-    await fetch(`${API_BASE}/${preset.id}`, { method: "DELETE" });
+    await fetch(`${API_BASE()}/${preset.id}`, { method: "DELETE" });
     ElMessage.success("删除成功");
     await fetchPresets();
   } catch {

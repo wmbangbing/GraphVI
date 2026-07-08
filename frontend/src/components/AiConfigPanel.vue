@@ -2,6 +2,7 @@
 import { ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 
+const apiUrl = (p) => (window.__API_BASE__ || "") + p;
 const SETTINGS_API = "/api/settings";
 
 const config = ref({
@@ -18,7 +19,7 @@ const testResult = ref(null);
 
 async function fetchSettings() {
   try {
-    const res = await fetch(SETTINGS_API);
+    const res = await fetch(apiUrl(SETTINGS_API));
     const data = await res.json();
     config.value = {
       llm_endpoint: data.llm_endpoint || "",
@@ -37,7 +38,7 @@ async function testConnection() {
   testing.value = true;
   testResult.value = null;
   try {
-    const res = await fetch("/api/analyze/test", {
+    const res = await fetch(apiUrl("/api/analyze/test"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -63,7 +64,7 @@ async function testConnection() {
 async function saveSettings() {
   saving.value = true;
   try {
-    await fetch(SETTINGS_API, {
+    await fetch(apiUrl(SETTINGS_API), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ settings: config.value }),

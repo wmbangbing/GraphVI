@@ -16,6 +16,7 @@ function toggleTheme() {
   localStorage.setItem("theme", isDark.value ? "dark" : "light");
 }
 
+function apiUrl(path) { return (window.__API_BASE__ || "") + path; }
 const API_BASE = "/api/query";
 const NL_API = "/api/query/nl";
 
@@ -46,7 +47,7 @@ async function executeQuery(cypher, historyMeta) {
   status.type = "info";
   status.message = "查询执行中...";
   try {
-    const res = await fetch(API_BASE, {
+    const res = await fetch(apiUrl(API_BASE), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cypher }),
@@ -83,7 +84,7 @@ async function executeQuery(cypher, historyMeta) {
 
 async function saveHistory(item) {
   try {
-    await fetch("/api/history", {
+    await fetch(apiUrl("/api/history"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(item),
@@ -101,7 +102,7 @@ async function executeNLQuery(question) {
   status.type = "info";
   status.message = "自然语言查询中...";
   try {
-    const res = await fetch(NL_API, {
+    const res = await fetch(apiUrl(NL_API), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question }),
@@ -151,7 +152,7 @@ const presets = ref([]);
 
 async function fetchPresets() {
   try {
-    const res = await fetch("/api/presets");
+    const res = await fetch(apiUrl("/api/presets"));
     presets.value = await res.json();
   } catch {}
 }
@@ -165,6 +166,37 @@ function executePreset(preset) {
 }
 
 onMounted(fetchPresets);
+
+// ─── Node Expand (double-click) ─────────────────────────────────────────────
+async function expandNode(node) {
+  const escapedId = node.id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const cypher = `MATCH (n)-[r]-(m) WHERE elementId(n) = "${escapedId}" RETURN n,r,m`;
+  try {
+    const res = await fetch(apiUrl(API_BASE), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cypher }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    // Deduplicate
+    const existingIds = new Set(graphData.value.nodes.map((n) => n.id));
+    const newNodes = data.nodes.filter((n) => !existingIds.has(n.id));
+
+    const existingRelKeys = new Set(graphData.value.relationships.map((r) => r.id));
+    const newRels = data.relationships.filter((r) => !existingRelKeys.has(r.id));
+
+    if (newNodes.length === 0 && newRels.length === 0) return;
+
+    graphData.value = {
+      nodes: [...graphData.value.nodes, ...newNodes],
+      relationships: [...graphData.value.relationships, ...newRels],
+    };
+  } catch (e) {
+    console.warn("Expand node error:", e);
+  }
+}
 </script>
 
 <template>
@@ -210,6 +242,7 @@ onMounted(fetchPresets);
         :dark="isDark"
         @update:label-props="labelProps = $event"
         @toggle-ai-summary="toggleAiSummary"
+        @node-double-click="expandNode"
       />
       <AiSummaryPanel
         :graph-data="graphData"

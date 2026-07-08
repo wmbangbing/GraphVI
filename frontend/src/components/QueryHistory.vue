@@ -7,6 +7,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["select"]);
+const apiUrl = (p) => (window.__API_BASE__ || "") + p;
 const HISTORY_API = "/api/history";
 
 const history = ref([]);
@@ -14,14 +15,14 @@ const activeNames = ref([]);
 
 async function fetchHistory() {
   try {
-    const res = await fetch(`${HISTORY_API}?limit=50`);
+    const res = await fetch(apiUrl(HISTORY_API + "?limit=50"));
     history.value = await res.json();
   } catch {}
 }
 
 async function handleDelete(id) {
   try {
-    await fetch(`${HISTORY_API}/${id}`, { method: "DELETE" });
+    await fetch(apiUrl(HISTORY_API + "/" + id), { method: "DELETE" });
     await fetchHistory();
   } catch {
     ElMessage.error("删除失败");
@@ -31,7 +32,7 @@ async function handleDelete(id) {
 async function handleClear() {
   try {
     await ElMessageBox.confirm("确定清空当前数据库的所有查询历史？", "确认");
-    await fetch(HISTORY_API, { method: "DELETE" });
+    await fetch(apiUrl(HISTORY_API), { method: "DELETE" });
     await fetchHistory();
   } catch {}
 }

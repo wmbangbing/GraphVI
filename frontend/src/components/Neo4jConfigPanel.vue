@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 
+const apiUrl = (p) => (window.__API_BASE__ || "") + p;
 const form = reactive({
   uri: "bolt://localhost:7687",
   username: "neo4j",
@@ -15,7 +16,7 @@ const saving = ref(false);
 async function loadSettings() {
   loading.value = true;
   try {
-    const res = await fetch("/api/settings");
+    const res = await fetch(apiUrl("/api/settings"));
     if (res.ok) {
       const s = await res.json();
       if (s.neo4j_uri) form.uri = s.neo4j_uri;
@@ -32,7 +33,7 @@ onMounted(loadSettings);
 async function testConnection() {
   testing.value = true;
   try {
-    const res = await fetch("/api/connect", {
+    const res = await fetch(apiUrl("/api/connect"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),
@@ -53,7 +54,7 @@ async function testConnection() {
 async function saveAndConnect() {
   saving.value = true;
   try {
-    const res = await fetch("/api/connect?save=true", {
+    const res = await fetch(apiUrl("/api/connect?save=true"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(form),

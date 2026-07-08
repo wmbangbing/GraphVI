@@ -8,11 +8,40 @@ import { markRaw } from "vue";
 // LabelDisplayConfig merged into panel directly
 
 // ─── Color Palette ───────────────────────────────────────────────────────────
-const LABEL_COLORS = [
-  "#e74c3c", "#f1c40f", "#2ecc71", "#3498db",
-  "#9b59b6", "#1abc9c", "#e67e22", "#fd79a8",
-  "#00cec9", "#ff7675", "#74b9ff", "#55efc4",
-];
+// Dynamic hash-based color: same label → same hue across queries.
+// Enforces minimum 35° hue difference between labels for visual distinction.
+const _hueCache = {};
+const _usedHues = [];
+function colorForLabel(label, isDark) {
+  // Return cached hue if seen before
+  if (_hueCache[label]) {
+    const h = _hueCache[label];
+    const sat = isDark ? 55 : 68;
+    const lit = isDark ? 55 : 43;
+    return `hsl(${h}, ${sat}%, ${lit}%)`;
+  }
+  // Generate base hue from label hash
+  let hash = 0;
+  const str = (label || "Node").toLowerCase();
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 6) + (hash << 16) - hash);
+  }
+  let hue = (Math.abs(hash * 2654435761) / 2 ** 32 % 1) * 330 + 15;
+  // Shift hue until it's at least 35° away from all already-used hues
+  let attempts = 0;
+  while (
+    attempts < 360 &&
+    _usedHues.some((h) => Math.min(Math.abs(hue - h), 360 - Math.abs(hue - h)) < 35)
+  ) {
+    hue = (hue + 37) % 360;
+    attempts++;
+  }
+  _hueCache[label] = hue;
+  _usedHues.push(hue);
+  const sat = isDark ? 55 : 68;
+  const lit = isDark ? 55 : 43;
+  return `hsl(${hue}, ${sat}%, ${lit}%)`;
+}
 
 // ─── Shared geometries (one copy in GPU memory for all nodes) ───────────────
 const CORE_SPHERE_GEOM = new THREE.SphereGeometry(0.8, 20, 20);
@@ -46,7 +75,7 @@ const props = defineProps({
   dark: { type: Boolean, default: true },
 });
 
-const emit = defineEmits(["update:labelProps", "toggleAiSummary"]);
+const emit = defineEmits(["update:labelProps", "toggleAiSummary", "nodeDoubleClick"]);
 
 // ─── Refs ────────────────────────────────────────────────────────────────────
 const wrapper2d = ref(null);
@@ -80,10 +109,9 @@ function primaryLabel(labels) {
 // ─── Color Map ───────────────────────────────────────────────────────────────
 const colorMap = computed(() => {
   const map = {};
-  let idx = 0;
   props.nodes.forEach((n) => {
     const label = primaryLabel(n.labels);
-    if (!map[label]) map[label] = LABEL_COLORS[idx++ % LABEL_COLORS.length];
+    if (!map[label]) map[label] = colorForLabel(label, props.dark);
   });
   return map;
 });
@@ -108,6 +136,11 @@ const legendWithProps = computed(() => {
     props: propMap[item.label]?.props || [],
   }));
 });
+
+// ─── Apply alpha to hsl/hsla color ────────────────────────────────────────────
+function alphaColor(color, alpha) {
+  return `hsla${color.slice(3, -1)}, ${alpha})`;
+}
 
 // ─── Display value helper ────────────────────────────────────────────────────
 function pickDisplayValue(node, labelProps) {
@@ -296,6 +329,12 @@ function buildNodeObject3D(node) {
 // ─── 3D node object tracking for dynamic highlight updates ───────────────────
 const nodeObjects3D = new Map();
 
+// ─── Double-click detection ───────────────────────────────────────────────────
+let _lastClickTime = 0;
+let _lastClickNode = null;
+let _pendingExpandId = null;
+let _expandHandled = false;
+
 // ─── Hover Highlighting ──────────────────────────────────────────────────────
 let highlightNodes = new Set();
 
@@ -382,13 +421,11 @@ function init3D(wrapper, data) {
     .nodeThreeObjectExtend(true)
     .nodeRelSize(isPerf ? 2.5 : 3)
     .linkColor((l) => {
-      if (hoveredNode.value) {
-        return isLinkHovered(l) ? "#ffffff" : "rgba(255,255,255,0.12)";
-      }
       const src = typeof l.source === "object" ? l.source : null;
       return src?.color || "#888888";
     })
-    .linkWidth(0.3)
+    .linkOpacity(0.25)
+    .linkWidth(0.4)
     .linkCurvature(0)
     .linkDirectionalArrowLength(isPerf ? 0 : 2)
     .linkDirectionalArrowRelPos(0.99)
@@ -404,6 +441,17 @@ function init3D(wrapper, data) {
     .showPointerCursor((d) => !!d)
     .onNodeHover(null)
     .onNodeClick((node) => {
+      const now = Date.now();
+      if (_lastClickNode === node && now - _lastClickTime < 350) {
+        _lastClickTime = 0;
+        _lastClickNode = null;
+        _pendingExpandId = node.id;
+        _expandHandled = false;
+        emit("nodeDoubleClick", node);
+        return;
+      }
+      _lastClickTime = now;
+      _lastClickNode = node;
       updateHighlight(node);
       if (node) showTooltip(node);
     })
@@ -414,6 +462,12 @@ function init3D(wrapper, data) {
       else forceRender2D();
     })
     .onEngineStop(() => {
+      if (!_expandHandled && _pendingExpandId) {
+        _expandHandled = true;
+        const target = instance.graphData().nodes.find(n => n.id === _pendingExpandId);
+        _pendingExpandId = null;
+        if (target) { focusNode(target); return; }
+      }
       try { instance.zoomToFit(400, 40); } catch {}
     });
 
@@ -461,6 +515,17 @@ function init2D(wrapper, data) {
     .showPointerCursor((d) => !!d)
     .onNodeHover(null)
     .onNodeClick((node) => {
+      const now = Date.now();
+      if (_lastClickNode === node && now - _lastClickTime < 350) {
+        _lastClickTime = 0;
+        _lastClickNode = null;
+        _pendingExpandId = node.id;
+        _expandHandled = false;
+        emit("nodeDoubleClick", node);
+        return;
+      }
+      _lastClickTime = now;
+      _lastClickNode = node;
       updateHighlight(node);
       if (node) showTooltip(node);
     })
@@ -471,6 +536,12 @@ function init2D(wrapper, data) {
       else forceRender2D();
     })
     .onEngineStop(() => {
+      if (!_expandHandled && _pendingExpandId) {
+        _expandHandled = true;
+        const target = instance.graphData().nodes.find(n => n.id === _pendingExpandId);
+        _pendingExpandId = null;
+        if (target) { focusNode(target); return; }
+      }
       try { instance.zoomToFit(400, 40); } catch {}
     });
 
@@ -488,7 +559,7 @@ function init2D(wrapper, data) {
     // Glow halo
     if (!isDimmed) {
       const grad = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, size * 3);
-      grad.addColorStop(0, node.color + "60");
+      grad.addColorStop(0, alphaColor(node.color, 0.38));
       grad.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = grad;
       ctx.beginPath();
@@ -499,7 +570,7 @@ function init2D(wrapper, data) {
     // Core circle
     ctx.beginPath();
     ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-    ctx.fillStyle = isDimmed ? node.color + "40" : node.color;
+    ctx.fillStyle = isDimmed ? alphaColor(node.color, 0.25) : node.color;
     ctx.fill();
     ctx.strokeStyle = isDimmed ? "rgba(255,255,255,0.1)" : (props.dark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.3)");
     ctx.lineWidth = isDimmed ? 0.5 : 1.5;
@@ -592,6 +663,9 @@ function togglePerfMode() {
 
 // ─── Toggle 2D/3D ────────────────────────────────────────────────────────────
 function toggleDimension() {
+  hoveredNode.value = null;
+  highlightNodes.clear();
+  hideTooltip();
   dimension.value = dimension.value === "2d" ? "3d" : "2d";
   layoutMode.value = "default";
   nextTick(() => initGraph());
@@ -626,7 +700,15 @@ watch(
         graphInstance.graphData(buildFreshData());
         setTimeout(() => {
           try {
-            graphInstance.zoomToFit(400, 40);
+            if (_pendingExpandId && !_expandHandled) {
+              _expandHandled = true;
+              const targetNode = graphInstance.graphData().nodes.find(n => n.id === _pendingExpandId);
+              _pendingExpandId = null;
+              if (targetNode) focusNode(targetNode);
+              else graphInstance.zoomToFit(400, 40);
+            } else {
+              graphInstance.zoomToFit(400, 40);
+            }
           } catch {}
         }, 500);
       } catch (e) {
