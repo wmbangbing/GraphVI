@@ -6,7 +6,7 @@ RETURN n, r, m
 LIMIT 50`;
 
 const props = defineProps({ loading: Boolean });
-const emit = defineEmits(["execute", "execute-nl", "execute-semantic"]);
+const emit = defineEmits(["execute", "execute-nl", "execute-semantic", "execute-semantic-nl"]);
 
 const mode = ref("cypher");
 const cypher = ref("");
@@ -18,9 +18,12 @@ function handleExecute() {
   } else if (mode.value === "nl") {
     if (!nlQuestion.value.trim()) return;
     emit("execute-nl", nlQuestion.value);
-  } else {
+  } else if (mode.value === "semantic") {
     if (!nlQuestion.value.trim()) return;
     emit("execute-semantic", nlQuestion.value);
+  } else {
+    if (!nlQuestion.value.trim()) return;
+    emit("execute-semantic-nl", nlQuestion.value);
   }
 }
 
@@ -46,6 +49,7 @@ function handleClear() {
       <span :class="{ active: mode === 'cypher' }" @click="mode = 'cypher'">Cypher</span>
       <span :class="{ active: mode === 'nl' }" @click="mode = 'nl'">自然语言</span>
       <span :class="{ active: mode === 'semantic' }" @click="mode = 'semantic'">语义</span>
+      <span :class="{ active: mode === 'semantic-nl' }" @click="mode = 'semantic-nl'">语义NL</span>
     </div>
 
     <div v-if="mode === 'cypher'">

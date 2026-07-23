@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -58,7 +60,7 @@ class AnalyzeResponse(BaseModel):
 
 
 class SettingsUpdate(BaseModel):
-    settings: dict[str, str]
+    settings: dict[str, Any]
 
 
 class NlQueryRequest(BaseModel):
@@ -98,6 +100,17 @@ class Nl2CypherResponse(BaseModel):
 class SemanticQueryRequest(BaseModel):
     question: str
     top_k: int = 10
+
+
+class SemanticNLQueryRequest(BaseModel):
+    question: str
+    top_k: int = 5
+
+
+class SemanticNLQueryResponse(BaseModel):
+    nodes: list[dict]
+    relationships: list[dict]
+    generated_cypher: str
 
 
 class ErrorResponse(BaseModel):

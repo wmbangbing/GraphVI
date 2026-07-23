@@ -16,7 +16,7 @@ const config = ref({
   embedding_api_key: "",
   embedding_model: "text-embedding-3-small",
   vector_index_name: "entity_vector",
-  semantic_query_hops: "1",
+  semantic_query_hops: 1,
 });
 const saving = ref(false);
 const testing = ref(false);
@@ -39,7 +39,7 @@ async function fetchSettings() {
       embedding_api_key: data.embedding_api_key || "",
       embedding_model: data.embedding_model || "text-embedding-3-small",
       vector_index_name: data.vector_index_name || "entity_vector",
-      semantic_query_hops: data.semantic_query_hops || "1",
+      semantic_query_hops: Number(data.semantic_query_hops) || 1,
     };
   } catch {
     ElMessage.error("获取配置失败");

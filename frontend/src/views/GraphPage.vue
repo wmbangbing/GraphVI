@@ -209,6 +209,42 @@ async function executeSemanticQuery(question) {
   }
 }
 
+// ─── Semantic NL Query (vector search + LLM traversal) ──────────────────────
+const SEMANTIC_NL_API = "/api/query/semantic-nl";
+
+async function executeSemanticNLQuery(question) {
+  loading.value = true;
+  status.type = "info";
+  status.message = "语义NL检索中...";
+  try {
+    const res = await fetch(apiUrl(SEMANTIC_NL_API), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      let detail = `请求失败 (${res.status})`;
+      try { const err = await res.json(); if (err.detail) detail = err.detail; } catch {}
+      status.type = "error";
+      status.message = detail;
+      graphData.value = { nodes: [], relationships: [] };
+      return;
+    }
+    const data = await res.json();
+    graphData.value = { nodes: data.nodes, relationships: data.relationships };
+    status.type = data.nodes.length ? "success" : "info";
+    status.message = data.nodes.length
+      ? `检索成功，找到 ${data.nodes.length} 个节点 (${data.generated_cypher?.slice(0, 60)}...)`
+      : "未找到匹配的图谱数据";
+  } catch (e) {
+    status.type = "error";
+    status.message = `网络错误: ${e.message}`;
+    graphData.value = { nodes: [], relationships: [] };
+  } finally {
+    loading.value = false;
+  }
+}
+
 // ─── AI Summary ─────────────────────────────────────────────────────────────
 const showAiSummary = ref(false);
 
@@ -302,7 +338,7 @@ async function expandNode(node) {
             <router-link to="/settings" class="settings-link" title="系统设置">⚙️</router-link>
           </div>
         </div>
-        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" @execute-semantic="executeSemanticQuery" />
+        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" @execute-semantic="executeSemanticQuery" @execute-semantic-nl="executeSemanticNLQuery" />
         <div v-if="presets.length > 0" class="preset-list">
           <div class="preset-list-header">预设问题</div>
           <div

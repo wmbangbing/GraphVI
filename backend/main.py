@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from database import conn_manager
-from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest, SemanticQueryRequest
+from models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest, SemanticQueryRequest, SemanticNLQueryRequest, SemanticNLQueryResponse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -357,6 +357,23 @@ async def semantic_test(body: dict | None = None):
         elif "connect" in msg.lower() or "timeout" in msg.lower():
             msg = f"无法连接到 API 地址，请检查网络"
         raise HTTPException(status_code=400, detail=f"语义检索测试失败: {msg}")
+
+
+@app.post("/api/query/semantic-nl", response_model=SemanticNLQueryResponse)
+async def semantic_nl_query(body: SemanticNLQueryRequest):
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    try:
+        from semantic_search import semantic_nl_search
+        graph, cypher = await semantic_nl_search(body.question.strip(), body.top_k)
+        return SemanticNLQueryResponse(
+            nodes=[n.model_dump() for n in graph.nodes],
+            relationships=[r.model_dump() for r in graph.relationships],
+            generated_cypher=cypher,
+        )
+    except Exception as e:
+        logger.warning("Semantic NL query failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"Semantic NL query error: {e}")
 
 
 class ConnectBody(BaseModel):

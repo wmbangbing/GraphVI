@@ -102,25 +102,34 @@ async def semantic_search(question: str, top_k: int = 10) -> GraphResponse:
         max_connection_lifetime=3600, max_connection_pool_size=10,
     )
     try:
-        # 1. Vector search to find entry node IDs
+        # 1. Vector search - use raw records to preserve Node objects
         vretriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
-        hits = vretriever.search(query_text=question, top_k=top_k)
+        raw = vretriever.get_search_results(query_text=question, top_k=top_k)
 
         node_ids = []
-        for item in hits.items:
-            node = item.content
-            if hasattr(node, "element_id"):
-                node_ids.append(str(node.element_id))
+        for record in raw.records:
+            eid = record.get("elementId")
+            if eid:
+                node_ids.append(str(eid))
 
         if not node_ids:
             return GraphResponse(nodes=[], relationships=[])
 
         # 2. Traverse from entry nodes with parameterized Cypher
-        traverse = f"""
+        if hops == 1:
+            traverse = """
 MATCH (node) WHERE elementId(node) IN $node_ids
-OPTIONAL MATCH (node)-[*1..{hops}]-(related)
+OPTIONAL MATCH (node)-[r]-(related)
 WHERE related IS NOT NULL AND NOT related = node
-RETURN node, collect(DISTINCT related) AS related_nodes
+RETURN node, collect(DISTINCT r) AS rels, collect(DISTINCT related) AS related_nodes
+"""
+        else:
+            traverse = f"""
+MATCH (node) WHERE elementId(node) IN $node_ids
+OPTIONAL MATCH (node)-[r*1..{hops}]-(related)
+WHERE related IS NOT NULL AND NOT related = node
+UNWIND r AS single_rel
+RETURN node, collect(DISTINCT single_rel) AS rels, collect(DISTINCT related) AS related_nodes
 """
         records, _ = await conn_manager.run_query(cypher=traverse, parameters={"node_ids": node_ids})
         return _parse_records(records if records else [])
@@ -130,6 +139,7 @@ RETURN node, collect(DISTINCT related) AS related_nodes
 
 # ─── Interface 2: LLM-generated traversal ──────────────────────────────────
 
+import json
 from openai import OpenAI as OpenAIClient
 from nl2cypher import _get_schema, _fix_unnamed_rels
 
@@ -149,20 +159,24 @@ async def semantic_nl_search(question: str, top_k: int = 5) -> tuple[GraphRespon
     embedder = _get_embedder()
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd), max_connection_lifetime=3600, max_connection_pool_size=10)
     try:
-        # 1. Vector search
+        # 1. Vector search (raw records to get Node objects)
         retriever = VectorRetriever(driver=sync_driver, index_name=index_name, embedder=embedder)
-        hits = retriever.search(query_text=question, top_k=top_k)
+        raw = retriever.get_search_results(query_text=question, top_k=top_k)
 
-        # 2. Build entry node context
+        # 2. Build entry node context (node is a dict from map projection, not a Node object)
         entry_lines = []
-        for item in hits.items:
-            node = item.content
-            if hasattr(node, "labels"):
-                props_dict = dict(node)
-                props_dict.pop("embedding", None)
+        node_ids = []
+        for rec in raw.records:
+            node = rec.get("node", {})
+            score = rec.get("score", 0)
+            eid = rec.get("elementId")
+            node_labels = rec.get("nodeLabels", [])
+            if eid and isinstance(node, dict) and node:
+                node_ids.append(str(eid))
+                props_dict = {k: v for k, v in node.items() if k != "embedding"}
                 props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
-                labels_str = ", ".join(node.labels)
-                entry_lines.append(f"  [{labels_str}] elementId: {node.element_id} {{{props_str}}}  [score: {item.metadata.get('score', 0):.4f}]")
+                labels_str = ", ".join(node_labels)
+                entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
         entry_context = "\n".join(entry_lines) if entry_lines else "  (no nodes found)"
 
         # 3. Get schema
@@ -170,28 +184,33 @@ async def semantic_nl_search(question: str, top_k: int = 5) -> tuple[GraphRespon
         from nl2cypher import _get_examples
         examples = _get_examples()
 
-        # 4. Build prompt
+        # 4. Build prompt — prescriptive template forces LLM to use the entry node IDs
+        node_id_list = json.dumps(node_ids)
         examples_str = "\n".join(examples) if examples else "(no examples)"
-        prompt = f"""Task: Based on the entry node(s) found below, generate a Cypher query to traverse the graph and answer the user question.
+        prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses relationships to answer the user question.
 
 Schema:
 {schema}
 
-Examples of good Cypher queries:
+Examples:
 {examples_str}
 
-Entry node(s) found by vector search (start from these):
+The entry nodes (start here):
 {entry_context}
 
 User question:
 {question}
 
+CRITICAL: Start with the EXACT pattern:
+  MATCH (entry) WHERE elementId(entry) IN {node_id_list}
+Then use OPTIONAL MATCH to traverse relationships from entry.
+Do NOT add any extra WHERE conditions on the entry node.
+
 Rules:
-- Use WHERE elementId(n) IN [...] to reference the entry nodes
-- MATCH to traverse relationships
-- RETURN all node and relationship variables so the graph can be rendered
-- Include relationship variables in RETURN
-- Always add LIMIT 200
+- Keep WHERE elementId(entry) IN {node_id_list} exactly as given
+- Use OPTIONAL MATCH (not MATCH) so entry nodes are always returned
+- RETURN entry, related nodes, and relationship variables
+- Add LIMIT 200
 - Only Cypher statement, no markdown"""
 
         oai = OpenAIClient(
@@ -211,10 +230,10 @@ Rules:
                 generated_cypher = generated_cypher.rsplit("```", 1)[0]
             generated_cypher = generated_cypher.strip()
 
-        # 5. Execute
+        # 5. Execute (pass node_ids as parameter for $node_ids)
         from nl2cypher import _fix_unnamed_rels
         generated_cypher = _fix_unnamed_rels(generated_cypher)
-        records, _ = await conn_manager.run_query(cypher=generated_cypher)
+        records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
         return _parse_records(records), generated_cypher
     finally:
         sync_driver.close()

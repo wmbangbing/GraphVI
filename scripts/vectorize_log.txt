@@ -1,0 +1,9 @@
+Start time: 2026/07/23 ÖÜËÄ 11:39:11.73 
+[OK] Entity label added
+[DATA] 200 Movie nodes
+  -> 50/200
+  -> 100/200
+  -> 150/200
+  -> 200/200
+[OK] Vector index created
+[DONE] All done

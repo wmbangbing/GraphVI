@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>知识图谱颜色方案对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0a0a0f; color: #e0e0e0; padding: 40px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+  p { color: #888; font-size: 13px; margin-bottom: 32px; }
+  .schemes { display: flex; flex-direction: column; gap: 40px; max-width: 1000px; }
+  .scheme { background: #14141e; border-radius: 12px; padding: 24px; border: 1px solid #222; }
+  .scheme-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .scheme-desc { font-size: 12px; color: #888; margin-bottom: 16px; }
+  .palette { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+  .swatch { width: 48px; height: 48px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.5); position: relative; }
+  .swatch .label { position: absolute; bottom: -18px; font-size: 10px; color: #888; white-space: nowrap; }
+  .graph-mock { display: flex; gap: 60px; justify-content: center; align-items: center; padding: 20px 0; }
+  .graph-mock canvas { border-radius: 8px; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-left: 8px; }
+  .badge.current { background: #e74c3c22; color: #e74c3c; border: 1px solid #e74c3c44; }
+  .badge.recommend { background: #2ecc7122; color: #2ecc71; border: 1px solid #2ecc7144; }
+</style>
+</head>
+<body>
+  <h1>知识图谱节点颜色方案对比</h1>
+  <p>基于你的数据标签（Person、Movie、Actor、Company、Studio、Award、Character、Franchise、Category、Episode）</p>
+
+  <div class="schemes">
+
+    <!-- 方案 A: 当前 -->
+    <div class="scheme">
+      <div class="scheme-title">方案 A：当前 12 色硬编码 <span class="badge current">当前</span></div>
+      <div class="scheme-desc">12 种高饱和纯色轮询分配，纯红 #e74c3c、纯黄 #f1c40f、纯绿 #2ecc71……长时间看图视觉疲劳。</div>
+      <div class="palette" id="current-palette"></div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="width:180px;height:120px;border-radius:8px;position:relative;overflow:hidden;background:#0a0a0f" id="graph-a"></div>
+      </div>
+    </div>
+
+    <!-- 方案 B: Material Design 色板 -->
+    <div class="scheme">
+      <div class="scheme-title">方案 B：Material Design 300 palette</div>
+      <div class="scheme-desc">Google Material Design 色板，每个色系有明度梯度，视觉更专业。低饱和度、不同明度，减少视觉疲劳。</div>
+      <div class="palette" id="material-palette"></div>
+    </div>
+
+    <!-- 方案 C: HSL 语义分组 -->
+    <div class="scheme">
+      <div class="scheme-title">方案 C：语义分组 HSL <span class="badge recommend">推荐</span></div>
+      <div class="scheme-desc">按语义分色相区域：人物类（橙红）、内容类（绿蓝）、组织类（蓝紫）、抽象类（粉紫）。低饱和度 + 暗色模式调高明度。</div>
+      <div class="palette" id="semantic-palette"></div>
+    </div>
+
+    <!-- 方案 D: 统一低饱和 + 随机色相 -->
+    <div class="scheme">
+      <div class="scheme-title">方案 D：低饱和柔色系</div>
+      <div class="scheme-desc">所有颜色饱和度降至 35-45%，明度 60-70%。色相任意分布但控制明度统一，整体柔和统一，适合长时间查看。</div>
+      <div class="palette" id="pastel-palette"></div>
+    </div>
+
+  </div>
+
+  <script>
+    const labels = ['Person', 'Movie', 'Actor', 'Company', 'Studio', 'Award', 'Character', 'Franchise', 'Category', 'Episode'];
+
+    // ─── A: 当前硬编码 12 色 ───────────────────────────────────
+    const currentColors = [
+      '#e74c3c','#f1c40f','#2ecc71','#3498db',
+      '#9b59b6','#1abc9c','#e67e22','#fd79a8',
+      '#00cec9','#ff7675','#74b9ff','#55efc4',
+    ];
+    renderPalette('current-palette', labels, (l, i) => currentColors[i % currentColors.length]);
+
+    // ─── B: Material Design 300 ────────────────────────────────
+    const material300 = [
+      '#e57373','#ffb74d','#fff176','#81c784',
+      '#64b5f6','#7986cb','#ba68c8','#f06292',
+      '#4db6ac','#ff8a65','#a1887f','#90a4ae',
+    ];
+    renderPalette('material-palette', labels, (l, i) => material300[i % material300.length]);
+
+    // ─── C: 语义分组 HSL ──────────────────────────────────────
+    function semanticColor(label, isDark) {
+      const groups = [
+        { labels: ['person','actor','director','star'], hue: 10, spread: 20 },
+        { labels: ['movie','episode','document'],        hue: 140, spread: 25 },
+        { labels: ['company','studio','agency','label'],  hue: 210, spread: 20 },
+        { labels: ['award','category','genre','tag'],     hue: 280, spread: 25 },
+        { labels: ['character','role','franchise'],       hue: 50, spread: 30 },
+      ];
+      const lower = label.toLowerCase();
+      let hue = 0;
+      for (const g of groups) {
+        if (g.labels.some(l => lower.includes(l))) { hue = g.hue; break; }
+      }
+      if (!hue) {
+        let hash = 0;
+        for (let i = 0; i < lower.length; i++) hash = lower.charCodeAt(i) + ((hash << 6) - hash);
+        hue = Math.abs(hash * 2654435761) / 2**32 % 1 * 330 + 15;
+      }
+      const sat = isDark ? 55 : 65;
+      const lit = isDark ? 55 : 44;
+      return `hsl(${hue}, ${sat}%, ${lit}%)`;
+    }
+    renderPalette('semantic-palette', labels, l => semanticColor(l, true));
+
+    // ─── D: 低饱和柔色系 ──────────────────────────────────────
+    function pastelColor(label) {
+      let hash = 0;
+      const lower = label.toLowerCase();
+      for (let i = 0; i < lower.length; i++) hash = lower.charCodeAt(i) + ((hash << 6) - hash);
+      const hue = Math.abs(hash * 2654435761) / 2**32 % 1 * 360;
+      return `hsl(${hue}, 40%, 62%)`;
+    }
+    renderPalette('pastel-palette', labels, l => pastelColor(l));
+
+    function renderPalette(id, labels, colorFn) {
+      const el = document.getElementById(id);
+      el.innerHTML = labels.map((l, i) => {
+        const c = colorFn(l, true, i);
+        return `<div class="swatch" style="background:${c}"><span class="label">${l}</span></div>`;
+      }).join('');
+    }
+  </script>
+  <div style="margin-top:40px;padding-top:24px;border-top:1px solid #222;font-size:13px;color:#666">
+    <strong>说明：</strong> 预览色块近似效果，实际渲染中 3D 节点的核心白色球体 + 半透内层会让颜色有所不同。
+    <br>方案 C 将人物类（Person、Actor）归入橙红区（10°），内容类（Movie、Episode）归入绿区（140°），
+    组织类（Company、Studio）归入蓝区（210°），抽象概念（Award、Category）归入紫区（280°）。
+  </div>
+</body>
+</html>
