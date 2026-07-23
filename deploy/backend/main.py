@@ -64,6 +64,7 @@ def _extract_node(node) -> NodeDTO:
     labels = list(node.labels) if hasattr(node, "labels") else (node.get("labels") or [])
     props = _serialize_props(dict(node))
     props.pop("elementId", None)
+    props.pop("embedding", None)
     node_id = str(node.element_id) if hasattr(node, "element_id") else str(id(node))
     caption = props.get("name") or props.get("title") or (list(props.values())[0] if props else "")
     return NodeDTO(id=node_id, labels=labels, properties=props, caption=str(caption))

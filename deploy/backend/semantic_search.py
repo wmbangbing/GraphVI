@@ -43,6 +43,7 @@ def _parse_records(records: list) -> GraphResponse:
             return
         if hasattr(val, "labels") and hasattr(val, "element_id"):
             props = _serialize_props(dict(val))
+            props.pop("embedding", None)
             nid = str(val.element_id)
             if nid not in nodes_map:
                 caption = props.get("name") or props.get("title") or (list(props.values())[0] if props else "")
@@ -214,7 +215,7 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
 
         # 3. Get schema
         schema = _get_schema(sync_driver, db, include_samples=False)
-        from nl2cypher import _get_examples
+        from backend.nl2cypher import _get_examples
         examples = _get_examples()
 
         # 4. Build prompt — prescriptive template forces LLM to use the entry node IDs
@@ -264,7 +265,7 @@ Rules:
             generated_cypher = generated_cypher.strip()
 
         # 5. Execute (pass node_ids as parameter for $node_ids)
-        from nl2cypher import _fix_unnamed_rels
+        from backend.nl2cypher import _fix_unnamed_rels
         generated_cypher = _fix_unnamed_rels(generated_cypher)
         records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
         return _parse_records(records), generated_cypher

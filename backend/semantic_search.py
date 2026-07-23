@@ -43,6 +43,7 @@ def _parse_records(records: list) -> GraphResponse:
             return
         if hasattr(val, "labels") and hasattr(val, "element_id"):
             props = _serialize_props(dict(val))
+            props.pop("embedding", None)
             nid = str(val.element_id)
             if nid not in nodes_map:
                 caption = props.get("name") or props.get("title") or (list(props.values())[0] if props else "")

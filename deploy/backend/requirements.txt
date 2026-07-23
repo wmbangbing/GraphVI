@@ -5,3 +5,4 @@ python-dotenv==1.0.1
 pydantic==2.10.3
 httpx==0.28.1
 neo4j-graphrag[openai]==1.14.1
+langchain-experimental==0.3.4
