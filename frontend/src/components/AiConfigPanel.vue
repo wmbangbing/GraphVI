@@ -17,6 +17,9 @@ const config = ref({
   embedding_model: "text-embedding-3-small",
   vector_index_name: "entity_vector",
   semantic_query_hops: 1,
+  semantic_score_threshold: 0.6,
+  semantic_top_k: 10,
+  enable_script_stats: "false",
 });
 const saving = ref(false);
 const testing = ref(false);
@@ -40,6 +43,9 @@ async function fetchSettings() {
       embedding_model: data.embedding_model || "text-embedding-3-small",
       vector_index_name: data.vector_index_name || "entity_vector",
       semantic_query_hops: Number(data.semantic_query_hops) || 1,
+      semantic_score_threshold: Number(data.semantic_score_threshold) || 0.6,
+      semantic_top_k: Number(data.semantic_top_k) || 10,
+      enable_script_stats: data.enable_script_stats || "false",
     };
   } catch {
     ElMessage.error("获取配置失败");
@@ -177,6 +183,15 @@ onMounted(fetchSettings);
         />
         <span>Schema 示例值（为每个标签采样属性值，提高查询准确率）</span>
       </div>
+      <div class="config-switch">
+        <el-switch
+          v-model="config.enable_script_stats"
+          active-value="true"
+          inactive-value="false"
+          size="small"
+        />
+        <span>脚本统计（AI 总结时用 Python 代码精确计算数值，而非 LLM 估算）</span>
+      </div>
     </div>
 
     <div class="config-section">
@@ -196,6 +211,12 @@ onMounted(fetchSettings);
         </el-form-item>
         <el-form-item label="关联跳数">
           <el-input-number v-model="config.semantic_query_hops" :min="0" :max="5" size="small" />
+        </el-form-item>
+        <el-form-item label="分数阈值">
+          <el-input-number v-model="config.semantic_score_threshold" :min="0" :max="1" :step="0.05" size="small" />
+        </el-form-item>
+        <el-form-item label="最多返回">
+          <el-input-number v-model="config.semantic_top_k" :min="1" :max="200" size="small" />
         </el-form-item>
       </el-form>
       <el-button size="small" :loading="semanticTesting" @click="testSemantic">测试向量检索</el-button>

@@ -34,6 +34,7 @@ def _serialize_props(props: dict) -> dict:
 
 
 def _parse_records(records: list) -> GraphResponse:
+    """Extract Node/Relationship objects from Neo4j records (same as main.py)."""
     nodes_map: dict[str, NodeDTO] = {}
     rels_map: dict[str, RelationshipDTO] = {}
 
@@ -76,10 +77,26 @@ def _parse_records(records: list) -> GraphResponse:
     return GraphResponse(nodes=list(nodes_map.values()), relationships=list(rels_map.values()))
 
 
-async def semantic_search(question: str, top_k: int = 10) -> GraphResponse:
+# ─── Interface 1: Fixed template (hops configurable) ────────────────────────
+
+# Hardcoded traversal template, {hops} replaced at runtime
+FIXED_TPL = """
+OPTIONAL MATCH (node)-[*1..{hops}]-(related)
+WHERE related IS NOT NULL
+RETURN node, collect(DISTINCT related) AS related_nodes, score
+"""
+
+
+from typing import Optional
+
+async def semantic_search(question: str, top_k: Optional[int] = None) -> GraphResponse:
+    """Vector search → filter by score threshold → n-hop traversal."""
     s = get_all_settings()
     index_name = s.get("vector_index_name", "entity_vector")
     hops = int(s.get("semantic_query_hops", "1"))
+    threshold = float(s.get("semantic_score_threshold", "0.6"))
+    if top_k is None:
+        top_k = int(s.get("semantic_top_k", "10"))
     if not index_name:
         raise ValueError("Vector index name not configured in settings")
 
@@ -90,18 +107,35 @@ async def semantic_search(question: str, top_k: int = 10) -> GraphResponse:
         max_connection_lifetime=3600, max_connection_pool_size=10,
     )
     try:
+        # 1. Vector search - fetch enough candidates, then filter by score
         vretriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
-        raw = vretriever.get_search_results(query_text=question, top_k=top_k)
+        raw = vretriever.get_search_results(query_text=question, top_k=max(top_k, 100))
 
-        node_ids = []
+        # Filter by score threshold, keep minimum 3 results
+        scored = []
         for record in raw.records:
             eid = record.get("elementId")
-            if eid:
-                node_ids.append(str(eid))
+            score = record.get("score", 0)
+            if eid and score is not None:
+                scored.append((str(eid), score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        print("=== [Semantic scores] ===", flush=True)
+        for eid, s in scored[:10]:
+            print(f"  score={s:.4f} eid={eid[:20]}...", flush=True)
+
+        filtered = [eid for eid, s in scored if s >= threshold]
+        if not filtered and scored:
+            filtered = [scored[0][0]]
+            print(f"  [threshold={threshold} too high, fallback to top-1]", flush=True)
+
+        print(f"  threshold={threshold}, filtered={len(filtered)}, total_candidates={len(scored)}", flush=True)
+        node_ids = filtered[:top_k]
 
         if not node_ids:
             return GraphResponse(nodes=[], relationships=[])
 
+        # 2. Traverse from entry nodes with parameterized Cypher
         if hops == 1:
             traverse = """
 MATCH (node) WHERE elementId(node) IN $node_ids
@@ -123,44 +157,67 @@ RETURN node, collect(DISTINCT single_rel) AS rels, collect(DISTINCT related) AS 
         driver.close()
 
 
+# ─── Interface 2: LLM-generated traversal ──────────────────────────────────
+
 import json
-from openai import OpenAIClient
+from openai import OpenAI as OpenAIClient
 from backend.nl2cypher import _get_schema, _fix_unnamed_rels
 
 
-async def semantic_nl_search(question: str, top_k: int = 5) -> tuple[GraphResponse, str]:
+async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tuple[GraphResponse, str]:
+    """Vector search → LLM generates traversal Cypher → execute.
+
+    Returns (GraphResponse, generated_cypher).
+    """
     s = get_all_settings()
     uri = s.get("neo4j_uri", "bolt://localhost:7687")
     user = s.get("neo4j_username", "neo4j")
     pwd = s.get("neo4j_password", "")
     db = s.get("neo4j_database", "neo4j")
     index_name = s.get("vector_index_name", "entity_vector")
+    if top_k is None:
+        top_k = int(s.get("semantic_top_k", "10"))
 
     embedder = _get_embedder()
     sync_driver = GraphDatabase.driver(uri, auth=(user, pwd), max_connection_lifetime=3600, max_connection_pool_size=10)
     try:
+        # 1. Vector search with score threshold
+        threshold = float(s.get("semantic_score_threshold", "0.6"))
         retriever = VectorRetriever(driver=sync_driver, index_name=index_name, embedder=embedder)
-        raw = retriever.get_search_results(query_text=question, top_k=top_k)
+        raw = retriever.get_search_results(query_text=question, top_k=max(top_k, 100))
 
-        entry_lines = []
-        node_ids = []
+        # Filter by score threshold
+        scored = []
         for rec in raw.records:
-            node = rec.get("node", {})
-            score = rec.get("score", 0)
             eid = rec.get("elementId")
+            score = rec.get("score", 0)
+            node = rec.get("node", {})
             node_labels = rec.get("nodeLabels", [])
             if eid and isinstance(node, dict) and node:
-                node_ids.append(str(eid))
-                props_dict = {k: v for k, v in node.items() if k != "embedding"}
-                props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
-                labels_str = ", ".join(node_labels)
-                entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
+                scored.append((str(eid), score, node, node_labels))
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        filtered_records = [r for r in scored if r[1] >= threshold]
+        if not filtered_records and scored:
+            filtered_records = [scored[0]]
+
+        # 2. Build entry node context
+        entry_lines = []
+        node_ids = []
+        for eid, score, node, node_labels in filtered_records[:top_k]:
+            node_ids.append(str(eid))
+            props_dict = {k: v for k, v in node.items() if k != "embedding"}
+            props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
+            labels_str = ", ".join(node_labels)
+            entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
         entry_context = "\n".join(entry_lines) if entry_lines else "  (no nodes found)"
 
+        # 3. Get schema
         schema = _get_schema(sync_driver, db, include_samples=False)
-        from backend.nl2cypher import _get_examples
+        from nl2cypher import _get_examples
         examples = _get_examples()
 
+        # 4. Build prompt — prescriptive template forces LLM to use the entry node IDs
         node_id_list = json.dumps(node_ids)
         examples_str = "\n".join(examples) if examples else "(no examples)"
         prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses relationships to answer the user question.
@@ -199,12 +256,15 @@ Rules:
             temperature=0,
         )
         generated_cypher = resp.choices[0].message.content.strip()
+        # Strip markdown fences
         if generated_cypher.startswith("```"):
             generated_cypher = generated_cypher.split("\n", 1)[-1]
             if "```" in generated_cypher:
                 generated_cypher = generated_cypher.rsplit("```", 1)[0]
             generated_cypher = generated_cypher.strip()
 
+        # 5. Execute (pass node_ids as parameter for $node_ids)
+        from nl2cypher import _fix_unnamed_rels
         generated_cypher = _fix_unnamed_rels(generated_cypher)
         records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
         return _parse_records(records), generated_cypher

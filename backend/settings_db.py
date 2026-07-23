@@ -39,6 +39,9 @@ def init_settings_table():
         "embedding_model": "text-embedding-3-small",
         "vector_index_name": "entity_vector",
         "semantic_query_hops": "1",
+        "enable_script_stats": "false",
+        "semantic_score_threshold": "0.6",
+        "semantic_top_k": "10",
     }
     for key, value in defaults.items():
         conn.execute(
