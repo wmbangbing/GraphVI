@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, watch, onMounted } from "vue";
+
 import QueryEditor from "../components/QueryEditor.vue";
 import GraphView from "../components/GraphView.vue";
 import StatusBar from "../components/StatusBar.vue";
@@ -19,12 +20,49 @@ function toggleTheme() {
 function apiUrl(path) { return (window.__API_BASE__ || "") + path; }
 const API_BASE = "/api/query";
 const NL_API = "/api/query/nl";
+const SEMANTIC_API = "/api/query/semantic";
 
 const graphData = ref({ nodes: [], relationships: [] });
 const loading = ref(false);
+const expanding = ref(false);
 const status = reactive({ type: "info", message: "" });
 const labelProps = ref({});
 
+// ─── Label Props Persistence ─────────────────────────────────────────────
+let _labelPropsReady = false;
+let _saveTimer = null;
+
+async function loadLabelProps() {
+  try {
+    const res = await fetch(apiUrl("/api/settings"));
+    if (!res.ok) return;
+    const s = await res.json();
+    if (s.label_props) {
+      try {
+        const parsed = JSON.parse(s.label_props);
+        if (typeof parsed === "object" && parsed !== null) {
+          labelProps.value = parsed;
+        }
+      } catch {}
+    }
+  } catch {}
+}
+
+watch(labelProps, () => {
+  if (!_labelPropsReady) return;
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    try {
+      await fetch(apiUrl("/api/settings"), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: { label_props: JSON.stringify(labelProps.value) } }),
+      });
+    } catch {}
+  }, 300);
+}, { deep: true });
+
+// Auto-select display property for labels without saved preference
 watch(
   () => graphData.value.nodes,
   (nodes) => {
@@ -137,6 +175,40 @@ async function executeNLQuery(question) {
   }
 }
 
+// ─── Semantic Query ─────────────────────────────────────────────────────────
+async function executeSemanticQuery(question) {
+  loading.value = true;
+  status.type = "info";
+  status.message = "语义检索中...";
+  try {
+    const res = await fetch(apiUrl(SEMANTIC_API), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      let detail = `请求失败 (${res.status})`;
+      try { const err = await res.json(); if (err.detail) detail = err.detail; } catch {}
+      status.type = "error";
+      status.message = detail;
+      graphData.value = { nodes: [], relationships: [] };
+      return;
+    }
+    const data = await res.json();
+    graphData.value = { nodes: data.nodes, relationships: data.relationships };
+    status.type = data.nodes.length ? "success" : "info";
+    status.message = data.nodes.length
+      ? `语义检索成功，找到 ${data.nodes.length} 个节点，${data.relationships.length} 个关系`
+      : "未找到匹配的图谱数据";
+  } catch (e) {
+    status.type = "error";
+    status.message = `网络错误: ${e.message}`;
+    graphData.value = { nodes: [], relationships: [] };
+  } finally {
+    loading.value = false;
+  }
+}
+
 // ─── AI Summary ─────────────────────────────────────────────────────────────
 const showAiSummary = ref(false);
 
@@ -165,10 +237,18 @@ function executePreset(preset) {
   }
 }
 
-onMounted(fetchPresets);
+onMounted(async () => {
+  fetchPresets();
+  await loadLabelProps();
+  _labelPropsReady = true;
+});
 
 // ─── Node Expand (double-click) ─────────────────────────────────────────────
 async function expandNode(node) {
+  if (expanding.value) return;
+  expanding.value = true;
+  status.type = "info";
+  status.message = "扩展查询中...";
   const escapedId = node.id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   const cypher = `MATCH (n)-[r]-(m) WHERE elementId(n) = "${escapedId}" RETURN n,r,m`;
   try {
@@ -187,14 +267,24 @@ async function expandNode(node) {
     const existingRelKeys = new Set(graphData.value.relationships.map((r) => r.id));
     const newRels = data.relationships.filter((r) => !existingRelKeys.has(r.id));
 
-    if (newNodes.length === 0 && newRels.length === 0) return;
+    if (newNodes.length === 0 && newRels.length === 0) {
+      status.type = "info";
+      status.message = "该节点没有关联的节点数据";
+      return;
+    }
 
     graphData.value = {
       nodes: [...graphData.value.nodes, ...newNodes],
       relationships: [...graphData.value.relationships, ...newRels],
     };
+    status.type = "success";
+    status.message = `节点扩展成功，新增 ${newNodes.length} 个节点`;
   } catch (e) {
     console.warn("Expand node error:", e);
+    status.type = "error";
+    status.message = "扩展查询失败";
+  } finally {
+    expanding.value = false;
   }
 }
 </script>
@@ -212,7 +302,7 @@ async function expandNode(node) {
             <router-link to="/settings" class="settings-link" title="系统设置">⚙️</router-link>
           </div>
         </div>
-        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" />
+        <QueryEditor :loading="loading" @execute="executeQuery" @execute-nl="executeNLQuery" @execute-semantic="executeSemanticQuery" />
         <div v-if="presets.length > 0" class="preset-list">
           <div class="preset-list-header">预设问题</div>
           <div
@@ -240,6 +330,7 @@ async function expandNode(node) {
         :relationships="graphData.relationships"
         :label-props="labelProps"
         :dark="isDark"
+        :expanding="expanding"
         @update:label-props="labelProps = $event"
         @toggle-ai-summary="toggleAiSummary"
         @node-double-click="expandNode"

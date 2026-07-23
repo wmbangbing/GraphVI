@@ -73,6 +73,7 @@ const props = defineProps({
   relationships: { type: Array, default: () => [] },
   labelProps: { type: Object, default: () => ({}) },
   dark: { type: Boolean, default: true },
+  expanding: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["update:labelProps", "toggleAiSummary", "nodeDoubleClick"]);
@@ -442,7 +443,7 @@ function init3D(wrapper, data) {
     .onNodeHover(null)
     .onNodeClick((node) => {
       const now = Date.now();
-      if (_lastClickNode === node && now - _lastClickTime < 350) {
+      if (_lastClickNode === node && now - _lastClickTime < 250 && !props.expanding) {
         _lastClickTime = 0;
         _lastClickNode = null;
         _pendingExpandId = node.id;
@@ -516,7 +517,7 @@ function init2D(wrapper, data) {
     .onNodeHover(null)
     .onNodeClick((node) => {
       const now = Date.now();
-      if (_lastClickNode === node && now - _lastClickTime < 350) {
+      if (_lastClickNode === node && now - _lastClickTime < 250 && !props.expanding) {
         _lastClickTime = 0;
         _lastClickNode = null;
         _pendingExpandId = node.id;
@@ -662,13 +663,23 @@ function togglePerfMode() {
 }
 
 // ─── Toggle 2D/3D ────────────────────────────────────────────────────────────
+let _toggleGuard = false;
 function toggleDimension() {
+  if (_toggleGuard) return;
+  _toggleGuard = true;
   hoveredNode.value = null;
   highlightNodes.clear();
   hideTooltip();
+  _pendingExpandId = null;
+  _expandHandled = false;
+  _lastClickTime = 0;
+  _lastClickNode = null;
   dimension.value = dimension.value === "2d" ? "3d" : "2d";
   layoutMode.value = "default";
-  nextTick(() => initGraph());
+  nextTick(() => {
+    initGraph();
+    setTimeout(() => { _toggleGuard = false; }, 300);
+  });
 }
 
 // ─── Fullscreen ──────────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from backend.database import conn_manager
-from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest
+from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest, SemanticQueryRequest
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -288,6 +288,63 @@ async def execute_query(body: CypherQuery):
     except Exception as e:
         logger.warning("Query failed: %s", e)
         raise HTTPException(status_code=400, detail=f"Query error: {e}")
+
+
+@app.post("/api/query/semantic", response_model=GraphResponse)
+async def semantic_query(body: SemanticQueryRequest):
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    try:
+        from backend.semantic_search import semantic_search
+        return await semantic_search(body.question.strip(), body.top_k)
+    except Exception as e:
+        logger.warning("Semantic query failed: %s", e)
+        raise HTTPException(status_code=400, detail=f"Semantic query error: {e}")
+
+
+@app.post("/api/query/semantic/test")
+async def semantic_test(body: dict | None = None):
+    """Test embedding API connectivity."""
+    try:
+        overrides = body or {}
+        from backend.settings_db import get_all_settings
+        endpoint = overrides.get("embedding_endpoint") or get_all_settings().get("embedding_endpoint", "https://api.openai.com/v1")
+        api_key = overrides.get("embedding_api_key") or get_all_settings().get("embedding_api_key", "")
+        model = overrides.get("embedding_model") or get_all_settings().get("embedding_model", "text-embedding-3-small")
+        vector_index = overrides.get("vector_index_name") or get_all_settings().get("vector_index_name", "entity_vector")
+
+        if not api_key:
+            raise ValueError("API Key 未配置")
+
+        from openai import OpenAI as OpenAIClient
+        client = OpenAIClient(api_key=api_key, base_url=endpoint.rstrip("/") + "/")
+        resp = client.embeddings.create(model=model, input="test")
+        dims = len(resp.data[0].embedding)
+
+        from backend.database import conn_manager as cm
+        index_ok = False
+        try:
+            records, _ = await cm.run_query(
+                "SHOW VECTOR INDEXES WHERE name = $name",
+                parameters={"name": vector_index},
+            )
+            index_ok = len(records) > 0
+        except Exception:
+            pass
+
+        parts = [f"Embedding API 连接成功，模型 {model}，维度 {dims}"]
+        parts.append(f"向量索引「{vector_index}」{'存在' if index_ok else '不存在，请在 Neo4j 中手动创建'}")
+
+        return {"status": "ok", "detail": "；".join(parts), "dimensions": dims, "index_exists": index_ok}
+    except Exception as e:
+        msg = str(e)
+        if "401" in msg or "unauthorized" in msg.lower():
+            msg = "API Key 无效或权限不足"
+        elif "404" in msg or "not found" in msg.lower():
+            msg = "模型不存在或 API 地址错误"
+        elif "connect" in msg.lower() or "timeout" in msg.lower():
+            msg = "无法连接到 API 地址，请检查网络"
+        raise HTTPException(status_code=400, detail=f"语义检索测试失败: {msg}")
 
 
 class ConnectBody(BaseModel):

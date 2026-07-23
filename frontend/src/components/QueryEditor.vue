@@ -6,7 +6,7 @@ RETURN n, r, m
 LIMIT 50`;
 
 const props = defineProps({ loading: Boolean });
-const emit = defineEmits(["execute", "execute-nl"]);
+const emit = defineEmits(["execute", "execute-nl", "execute-semantic"]);
 
 const mode = ref("cypher");
 const cypher = ref("");
@@ -15,9 +15,12 @@ const nlQuestion = ref("");
 function handleExecute() {
   if (mode.value === "cypher") {
     emit("execute", cypher.value || DEFAULT_QUERY);
-  } else {
+  } else if (mode.value === "nl") {
     if (!nlQuestion.value.trim()) return;
     emit("execute-nl", nlQuestion.value);
+  } else {
+    if (!nlQuestion.value.trim()) return;
+    emit("execute-semantic", nlQuestion.value);
   }
 }
 
@@ -42,6 +45,7 @@ function handleClear() {
     <div class="qe-tabs">
       <span :class="{ active: mode === 'cypher' }" @click="mode = 'cypher'">Cypher</span>
       <span :class="{ active: mode === 'nl' }" @click="mode = 'nl'">自然语言</span>
+      <span :class="{ active: mode === 'semantic' }" @click="mode = 'semantic'">语义</span>
     </div>
 
     <div v-if="mode === 'cypher'">
@@ -56,7 +60,7 @@ function handleClear() {
       />
     </div>
 
-    <div v-else>
+    <div v-else-if="mode === 'nl'">
       <el-input
         v-model="nlQuestion"
         placeholder="输入自然语言问题，例如：查询所有事件"
@@ -64,6 +68,18 @@ function handleClear() {
         :rows="4"
         @keydown="handleKeydown"
       />
+    </div>
+    <div v-else>
+      <el-input
+        v-model="nlQuestion"
+        placeholder="输入搜索内容，例如：巴威台风应急事件"
+        type="textarea"
+        :rows="4"
+        @keydown="handleKeydown"
+      />
+      <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
+        基于向量检索，搜索图谱中语义相似的节点及关联信息
+      </div>
     </div>
 
     <div class="btn-row">

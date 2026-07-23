@@ -20,12 +20,12 @@ def invalidate_schema_cache():
 def _get_label_samples(session, label_name: str) -> dict:
     """Sample up to 2 nodes for a given label and return property values"""
     try:
-        query = f"MATCH (n) WHERE n:`{label_name}` RETURN n LIMIT 2"
+        query = f"MATCH (n) WHERE n:`{label_name}` RETURN n ORDER BY elementId(n) LIMIT 2"
         rows = list(session.run(query))
         samples = {}
         for row in rows:
             node = row["n"]
-            for k, v in dict(node).items():
+            for k, v in sorted(dict(node).items()):
                 if k not in samples and v is not None and not str(v).startswith("http"):
                     val_str = str(v)[:40]
                     if len(val_str) > 3:  # skip single chars
@@ -38,6 +38,7 @@ def _get_label_samples(session, label_name: str) -> dict:
 def _get_schema(driver, database: str, include_samples: bool = False) -> str:
     with driver.session(database=database) as session:
         node_rows = list(session.run("CALL db.schema.nodeTypeProperties()"))
+        node_rows.sort(key=lambda r: ".".join(r["nodeLabels"] or [""]))
         node_props = {}
         for row in node_rows:
             labels = tuple(row["nodeLabels"])
@@ -46,8 +47,11 @@ def _get_schema(driver, database: str, include_samples: bool = False) -> str:
             ptype = row["propertyTypes"]
             ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
             node_props[labels].append(f"{row['propertyName']}: {ptype_str}")
+        for props in node_props.values():
+            props.sort()
 
         rel_rows = list(session.run("CALL db.schema.relTypeProperties()"))
+        rel_rows.sort(key=lambda r: str(r["relType"] or ""))
         rel_props = {}
         for row in rel_rows:
             rt = row["relType"]
@@ -56,6 +60,8 @@ def _get_schema(driver, database: str, include_samples: bool = False) -> str:
             ptype = row["propertyTypes"]
             ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
             rel_props[rt].append(f"{row['propertyName']}: {ptype_str}")
+        for props in rel_props.values():
+            props.sort()
 
         viz = list(session.run("CALL db.schema.visualization()"))
         rel_patterns = set()
@@ -94,7 +100,7 @@ def _get_llm():
     s = get_all_settings()
     return OpenAILLM(
         model_name=s.get("llm_model", "gpt-4o"),
-        model_params={"temperature": 0},
+        model_params={"temperature": 0, "seed": 42},
         api_key=s.get("llm_api_key", ""),
         base_url=s.get("llm_endpoint", "https://api.openai.com/v1") + "/",
     )
@@ -114,6 +120,58 @@ def _get_examples() -> list[str]:
         return examples[:10]
     except Exception:
         return []
+
+
+import re
+
+
+def _fix_unnamed_rels(cypher: str) -> str:
+    """Post-process: give variables to unnamed relationships and ensure RETURN
+    includes them so the graph renderer gets node+edge data."""
+    # Find already existing rel variable names to avoid conflicts
+    existing = set(re.findall(r"\[(\w+):", cypher))
+    counter = [0]
+
+    def _new_var():
+        counter[0] += 1
+        v = f"r{counter[0]}"
+        while v in existing:
+            counter[0] += 1
+            v = f"r{counter[0]}"
+        existing.add(v)
+        return v
+
+    # 1. Give variables to unnamed relationships: -[:TYPE]-> / <-[:TYPE]-
+    # Handles: -[:T]->, -[:T*1..3]->, -[:T|:T2]->, and direction variants
+    fixed = re.sub(
+        r"(?<=[\-(,])-\s*\[\s*:([\w*|]+(?:\s*\|\s*[\w*]+)*)\s*\]\s*->",
+        lambda m: f"-[{_new_var()}:{m.group(1)}]->",
+        cypher,
+    )
+    fixed = re.sub(
+        r"(?<=[\-(,])<-\s*\[\s*:([\w*|]+(?:\s*\|\s*[\w*]+)*)\s*\]\s*-",
+        lambda m: f"<-[{_new_var()}:{m.group(1)}]-",
+        fixed,
+    )
+
+    # 2. Collect all relationship variable names used in the query
+    rel_vars = re.findall(r"\[(\w+):", fixed)
+
+    # 3. Ensure RETURN clause includes all rel variables
+    ret_m = re.search(
+        r"RETURN\s+(.+?)(?:\s+(?:LIMIT|ORDER|SKIP|WITH)\b|\s*$)",
+        fixed,
+        re.IGNORECASE,
+    )
+    if ret_m and rel_vars:
+        ret_cols = [c.strip() for c in re.split(r"\s*,\s*", ret_m.group(1))]
+        missing = [v for v in rel_vars if v not in ret_cols]
+        if missing:
+            # Insert before the next clause (LIMIT/ORDER/SKIP) or append
+            after = fixed[ret_m.end(1):]
+            fixed = fixed[:ret_m.end(1)] + ", " + ", ".join(missing) + after
+
+    return fixed
 
 
 async def nl2cypher(question: str) -> dict:
@@ -153,6 +211,7 @@ async def nl2cypher(question: str) -> dict:
 
         result = retriever.search(query_text=question)
         generated_cypher = result.metadata.get("cypher", "")
+        generated_cypher = _fix_unnamed_rels(generated_cypher)
 
         from database import conn_manager
         records, _ = await conn_manager.run_query(cypher=generated_cypher)
@@ -203,6 +262,6 @@ def generate_cypher_only(question: str) -> str:
         )
 
         result = retriever.search(query_text=question)
-        return result.metadata.get("cypher", "")
+        return _fix_unnamed_rels(result.metadata.get("cypher", ""))
     finally:
         sync_driver.close()

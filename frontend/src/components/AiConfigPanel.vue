@@ -12,10 +12,17 @@ const config = ref({
   summary_prompt: "",
   nl_query_prompt: "",
   nl_schema_examples: "false",
+  embedding_endpoint: "https://api.openai.com/v1",
+  embedding_api_key: "",
+  embedding_model: "text-embedding-3-small",
+  vector_index_name: "entity_vector",
+  semantic_query_hops: "1",
 });
 const saving = ref(false);
 const testing = ref(false);
 const testResult = ref(null);
+const semanticTesting = ref(false);
+const semanticTestResult = ref(null);
 
 async function fetchSettings() {
   try {
@@ -28,6 +35,11 @@ async function fetchSettings() {
       summary_prompt: data.summary_prompt || "",
       nl_query_prompt: data.nl_query_prompt || "",
       nl_schema_examples: data.nl_schema_examples || "false",
+      embedding_endpoint: data.embedding_endpoint || "https://api.openai.com/v1",
+      embedding_api_key: data.embedding_api_key || "",
+      embedding_model: data.embedding_model || "text-embedding-3-small",
+      vector_index_name: data.vector_index_name || "entity_vector",
+      semantic_query_hops: data.semantic_query_hops || "1",
     };
   } catch {
     ElMessage.error("获取配置失败");
@@ -58,6 +70,37 @@ async function testConnection() {
     testResult.value = { ok: false, message: `网络错误: ${e.message}` };
   } finally {
     testing.value = false;
+  }
+}
+
+async function testSemantic() {
+  semanticTesting.value = true;
+  semanticTestResult.value = null;
+  try {
+    const res = await fetch(apiUrl("/api/query/semantic/test"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        embedding_endpoint: config.value.embedding_endpoint,
+        embedding_api_key: config.value.embedding_api_key,
+        embedding_model: config.value.embedding_model,
+        vector_index_name: config.value.vector_index_name,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      semanticTestResult.value = {
+        ok: true,
+        message: data.detail || "测试通过",
+      };
+    } else {
+      const err = await res.json();
+      semanticTestResult.value = { ok: false, message: err.detail || "测试失败" };
+    }
+  } catch (e) {
+    semanticTestResult.value = { ok: false, message: `网络错误: ${e.message}` };
+  } finally {
+    semanticTesting.value = false;
   }
 }
 
@@ -133,6 +176,31 @@ onMounted(fetchSettings);
           size="small"
         />
         <span>Schema 示例值（为每个标签采样属性值，提高查询准确率）</span>
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">语义检索</h3>
+      <el-form label-position="top" size="small">
+        <el-form-item label="Embedding API 地址">
+          <el-input v-model="config.embedding_endpoint" placeholder="https://api.openai.com/v1" />
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="config.embedding_api_key" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="模型">
+          <el-input v-model="config.embedding_model" placeholder="text-embedding-3-small" />
+        </el-form-item>
+        <el-form-item label="向量索引名">
+          <el-input v-model="config.vector_index_name" placeholder="entity_vector" />
+        </el-form-item>
+        <el-form-item label="关联跳数">
+          <el-input-number v-model="config.semantic_query_hops" :min="0" :max="5" size="small" />
+        </el-form-item>
+      </el-form>
+      <el-button size="small" :loading="semanticTesting" @click="testSemantic">测试向量检索</el-button>
+      <div v-if="semanticTestResult" class="test-result" :class="{ success: semanticTestResult.ok, error: !semanticTestResult.ok }">
+        {{ semanticTestResult.message }}
       </div>
     </div>
 

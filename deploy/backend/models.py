@@ -95,5 +95,10 @@ class Nl2CypherResponse(BaseModel):
     cypher: str
 
 
+class SemanticQueryRequest(BaseModel):
+    question: str
+    top_k: int = 10
+
+
 class ErrorResponse(BaseModel):
     detail: str
