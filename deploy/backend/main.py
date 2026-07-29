@@ -11,8 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
-from backend.database import conn_manager
-from backend.models import (CypherQuery, GraphResponse, NodeDTO, RelationshipDTO,
+from database import conn_manager
+from models import (CypherQuery, GraphResponse, NodeDTO, RelationshipDTO,
                     PresetCreate, PresetUpdate, PresetResponse,
                     AnalyzeRequest, AnalyzeResponse, SettingsUpdate,
                     NlQueryRequest, NlQueryResponse,
@@ -144,9 +144,9 @@ def _parse_graph_data(records: list) -> GraphResponse:
 
 
 # ─── Presets API ─────────────────────────────────────────────────────────────
-from backend.presets_db import init_db, get_all, create, update as update_preset, delete as delete_preset
-from backend.settings_db import init_settings_table, get_all_settings, set_multiple_settings
-from backend.history_db import init_history_table, add_history, get_history, delete_history, clear_history
+from presets_db import init_db, get_all, create, update as update_preset, delete as delete_preset
+from settings_db import init_settings_table, get_all_settings, set_multiple_settings
+from history_db import init_history_table, add_history, get_history, delete_history, clear_history
 
 init_db()
 init_settings_table()
@@ -179,7 +179,7 @@ async def delete_preset_endpoint(preset_id: int):
 
 
 # ─── AI Analyse API ──────────────────────────────────────────────────────────
-from backend.llm_service import call_llm_stream, test_llm_connection
+from llm_service import call_llm_stream, test_llm_connection
 
 
 @app.post("/api/analyze/test")
@@ -214,7 +214,7 @@ async def analyze_graph_stream(body: AnalyzeRequest):
 # ─── History API ─────────────────────────────────────────────────────────────
 @app.get("/api/history")
 async def list_history(limit: int = 50):
-    from backend.settings_db import get_all_settings
+    from settings_db import get_all_settings
     s = get_all_settings()
     uri = s.get("neo4j_uri", "")
     db = s.get("neo4j_database", "")
@@ -223,7 +223,7 @@ async def list_history(limit: int = 50):
 
 @app.post("/api/history")
 async def save_history(body: HistoryAddRequest):
-    from backend.settings_db import get_all_settings
+    from settings_db import get_all_settings
     s = get_all_settings()
     uri = s.get("neo4j_uri", "")
     db = s.get("neo4j_database", "")
@@ -239,7 +239,7 @@ async def delete_history_item(history_id: int):
 
 @app.delete("/api/history")
 async def clear_history_all():
-    from backend.settings_db import get_all_settings
+    from settings_db import get_all_settings
     s = get_all_settings()
     uri = s.get("neo4j_uri", "")
     db = s.get("neo4j_database", "")
@@ -257,10 +257,16 @@ async def list_settings():
 async def update_settings(body: SettingsUpdate):
     set_multiple_settings(body.settings)
     if "schema_include" in body.settings:
-        from backend.nl2cypher import invalidate_schema_cache as _inv1
+        from nl2cypher import invalidate_schema_cache as _inv1
         from backend.semantic_search import invalidate_schema_cache as _inv2
         _inv1()
         _inv2()
+    if any(k in body.settings for k in ("llm_endpoint", "llm_api_key", "llm_model")):
+        from backend.llm_service import invalidate_llm_client
+        invalidate_llm_client()
+    if any(k in body.settings for k in ("embedding_endpoint", "embedding_api_key")):
+        from backend.semantic_search import _invalidate_embed_client
+        _invalidate_embed_client()
     return {"status": "ok"}
 
 
@@ -268,7 +274,7 @@ async def update_settings(body: SettingsUpdate):
 async def execute_nl_query(body: NlQueryRequest):
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    from backend.nl2cypher import nl2cypher
+    from nl2cypher import nl2cypher
     try:
         result = await nl2cypher(body.question.strip())
         graph = _parse_graph_data(result["records"])
@@ -287,7 +293,7 @@ async def nl2cypher_api(body: Nl2CypherRequest):
     """Generate Cypher from natural language, return only the Cypher statement."""
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
-    from backend.nl2cypher import generate_cypher_only
+    from nl2cypher import generate_cypher_only
     try:
         cypher = await generate_cypher_only(body.question.strip())
         return Nl2CypherResponse(cypher=cypher)
@@ -329,7 +335,7 @@ async def semantic_test(body: dict | None = None):
     """Test embedding API connectivity. Checks: API reachable + model exists."""
     try:
         overrides = body or {}
-        from backend.settings_db import get_all_settings
+        from settings_db import get_all_settings
         endpoint = overrides.get("embedding_endpoint") or get_all_settings().get("embedding_endpoint", "https://api.openai.com/v1")
         api_key = overrides.get("embedding_api_key") or get_all_settings().get("embedding_api_key", "")
         model = overrides.get("embedding_model") or get_all_settings().get("embedding_model", "text-embedding-3-small")
@@ -355,7 +361,7 @@ async def semantic_test(body: dict | None = None):
         dims = len(_data["data"][0]["embedding"])
 
         # 2. Check if vector index exists in Neo4j
-        from backend.database import conn_manager as cm
+        from database import conn_manager as cm
         index_ok = False
         try:
             records, _ = await cm.run_query(
@@ -407,7 +413,7 @@ async def auto_analyze_endpoint(body: AutoAnalyzeRequest):
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     try:
-        from backend.auto_analyzer import auto_analyze as _auto_analyze, auto_analyze_nonstream, auto_analyze_stream
+        from auto_analyzer import auto_analyze as _auto_analyze, auto_analyze_nonstream, auto_analyze_stream
 
         if body.stream:
             async def event_stream():
@@ -454,8 +460,8 @@ async def auto_analyze_endpoint(body: AutoAnalyzeRequest):
 async def get_schema_types():
     """Return all node types and relationship types from Neo4j schema."""
     try:
-        from backend.database import conn_manager as _cm
-        from backend.nl2cypher import _get_cached_driver
+        from database import conn_manager as _cm
+        from nl2cypher import _get_cached_driver
         s = get_all_settings()
         uri = s.get("neo4j_uri", "bolt://localhost:7687")
         user = s.get("neo4j_username", "neo4j")
@@ -510,7 +516,7 @@ async def test_connect(body: ConnectBody, save: bool = False):
                 "neo4j_password": body.password,
                 "neo4j_database": body.database,
             })
-            from backend.nl2cypher import invalidate_schema_cache
+            from nl2cypher import invalidate_schema_cache
             await conn_manager.reconnect()
             invalidate_schema_cache()
 

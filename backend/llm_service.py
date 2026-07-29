@@ -5,6 +5,10 @@ import httpx
 
 from settings_db import get_all_settings
 
+# Global cached async httpx client for LLM calls
+_llm_client = None
+_llm_client_key = ""
+
 
 def _aggregate_stats(nodes: list, relationships: list, ignored_label: str = "") -> dict:
     """Auto-aggregate all numeric fields - works with any graph schema."""
@@ -110,20 +114,39 @@ def _call_llm_sync(prompt: str, temperature: float = 0.1, max_tokens: int = 8192
     return resp.json()["choices"][0]["message"]["content"]
 
 
+def invalidate_llm_client():
+    """Force recreation of the cached LLM client (called when settings change)."""
+    global _llm_client, _llm_client_key
+    _llm_client = None
+    _llm_client_key = ""
+
+
+def _get_llm_client(endpoint: str, api_key: str):
+    """Get or create a cached async httpx client for LLM calls."""
+    global _llm_client, _llm_client_key
+    key = f"{endpoint}|{api_key[:8]}"
+    if _llm_client is None or _llm_client_key != key:
+        _llm_client = httpx.AsyncClient(
+            timeout=120,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        _llm_client_key = key
+    return _llm_client
+
+
 async def _call_llm_async(prompt: str, temperature: float = 0.1, max_tokens: int = 8192) -> str:
-    """Async version of _call_llm_sync — non-blocking."""
+    """Async version of _call_llm_sync — non-blocking, with connection reuse."""
     s = get_all_settings()
     endpoint = s.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
     api_key = s.get("llm_api_key", "")
     model = s.get("llm_model", "gpt-4o")
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{endpoint}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
-        )
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+    client = _get_llm_client(endpoint, api_key)
+    resp = await client.post(
+        f"{endpoint}/chat/completions",
+        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
 
 
 def _safe_exec(script: str, nodes: list, relationships: list) -> dict:
@@ -270,10 +293,9 @@ Use defaultdict if needed. Standard library only."""
         {"role": "user", "content": prompt},
     ]
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", f"{endpoint}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 4096, "stream": True}) as response:
+    client = _get_llm_client(endpoint, api_key)
+    async with client.stream("POST", f"{endpoint}/chat/completions",
+        json={"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 4096, "stream": True}) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
                 if not line.startswith("data: "):

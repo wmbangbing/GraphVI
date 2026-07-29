@@ -261,6 +261,12 @@ async def update_settings(body: SettingsUpdate):
         from semantic_search import invalidate_schema_cache as _inv2
         _inv1()
         _inv2()
+    if any(k in body.settings for k in ("llm_endpoint", "llm_api_key", "llm_model")):
+        from llm_service import invalidate_llm_client
+        invalidate_llm_client()
+    if any(k in body.settings for k in ("embedding_endpoint", "embedding_api_key")):
+        from semantic_search import _invalidate_embed_client
+        _invalidate_embed_client()
     return {"status": "ok"}
 
 
