@@ -1,5 +1,6 @@
 <script setup>
 import { ref, reactive, watch, onMounted } from "vue";
+defineOptions({ name: "GraphPage" });
 
 import QueryEditor from "../components/QueryEditor.vue";
 import GraphView from "../components/GraphView.vue";

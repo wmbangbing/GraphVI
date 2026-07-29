@@ -99,11 +99,13 @@ const tooltipNode = ref(null);
 
 let graphInstance = null;
 
-// ─── Pick primary label (skip "Entity" if other labels exist) ────────────────
+// ─── Pick primary label (skip ignored labels like _Embeddable) ──────────────
+const _ignoredLabels = new Set((localStorage.getItem("ignored_label") || "_Embeddable").split(",").map(s => s.trim()).filter(Boolean));
+
 function primaryLabel(labels) {
   if (!labels || labels.length === 0) return "Node";
   if (labels.length === 1) return labels[0];
-  const other = labels.find((l) => l !== "Entity");
+  const other = labels.find((l) => !_ignoredLabels.has(l));
   return other || labels[0];
 }
 
@@ -469,7 +471,6 @@ function init3D(wrapper, data) {
         _pendingExpandId = null;
         if (target) { focusNode(target); return; }
       }
-      try { instance.zoomToFit(400, 40); } catch {}
     });
 
   return instance;
@@ -543,7 +544,6 @@ function init2D(wrapper, data) {
         _pendingExpandId = null;
         if (target) { focusNode(target); return; }
       }
-      try { instance.zoomToFit(400, 40); } catch {}
     });
 
   // Custom node rendering with glow + label
@@ -551,7 +551,7 @@ function init2D(wrapper, data) {
 
   instance.nodeCanvasObject((node, ctx, globalScale) => {
     // Skip nodes without valid positions (before first simulation tick)
-    if (!node.x || !Number.isFinite(node.x)) return;
+    if (node.x == null || !Number.isFinite(node.x)) return;
 
     const label = node.name || "";
     const size = 5;
@@ -616,6 +616,7 @@ function initGraph() {
     setTimeout(() => {
       try {
         graphInstance.zoomToFit(400, 40);
+        setTimeout(() => { if (graphInstance.zoom() > 3) graphInstance.zoom(3, 200); }, 500);
       } catch {}
     }, 500);
   } catch (e) {
@@ -696,14 +697,12 @@ function toggleFullscreen() {
 // ─── Watch data changes ──────────────────────────────────────────────────────
 watch(
   () => [props.nodes, props.relationships, props.labelProps],
-  () => {
-    // Clear hover state before graphData() — force-graph does not fire
-    // onNodeHover(null) after data replacement due to shadow canvas
-    // throttling (800ms) and color registry index collision, leaving a
-    // stale highlight on the canvas.
+  ([newNodes, newRels, newLabel], [oldNodes, oldRels, oldLabel]) => {
     hoveredNode.value = null;
     highlightNodes.clear();
     hideTooltip();
+
+    const isDataChange = newNodes !== oldNodes || newRels !== oldRels;
 
     if (graphInstance) {
       nodeObjects3D.clear();
@@ -716,8 +715,7 @@ watch(
               const targetNode = graphInstance.graphData().nodes.find(n => n.id === _pendingExpandId);
               _pendingExpandId = null;
               if (targetNode) focusNode(targetNode);
-              else graphInstance.zoomToFit(400, 40);
-            } else {
+            } else if (isDataChange) {
               graphInstance.zoomToFit(400, 40);
             }
           } catch {}

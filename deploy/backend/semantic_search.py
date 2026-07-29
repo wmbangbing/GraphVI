@@ -1,5 +1,6 @@
 """Semantic search using VectorCypherRetriever (fixed template) + semantic NL search (LLM traversal)"""
 
+import asyncio
 from neo4j import GraphDatabase
 from neo4j_graphrag.retrievers import VectorRetriever, VectorCypherRetriever
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
@@ -7,6 +8,34 @@ from neo4j_graphrag.embeddings import OpenAIEmbeddings
 from backend.settings_db import get_all_settings
 from backend.database import conn_manager
 from backend.models import GraphResponse, NodeDTO, RelationshipDTO
+
+# Schema cache for semantic_nl (no samples, own module to avoid cross-module assignment issues)
+_schema_cache_ns = None
+_schema_cache_db_ns = None
+
+
+class _HttpxEmbedder:
+    """Custom embedder using httpx directly, bypasses openai library UA issues."""
+    def __init__(self, endpoint: str, api_key: str, model: str):
+        self._endpoint = endpoint.rstrip("/")
+        self._api_key = api_key
+        self._model = model
+        self._ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    def embed_query(self, text: str) -> list[float]:
+        import httpx
+        r = httpx.post(
+            f"{self._endpoint}/embeddings",
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": self._ua,
+            },
+            json={"model": self._model, "input": text},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json()["data"][0]["embedding"]
 
 
 def _get_embedder():
@@ -16,7 +45,7 @@ def _get_embedder():
     model = s.get("embedding_model", "text-embedding-3-small")
     if not api_key:
         raise ValueError("Embedding API key not configured in settings")
-    return OpenAIEmbeddings(model=model, api_key=api_key, base_url=endpoint.rstrip("/") + "/")
+    return _HttpxEmbedder(endpoint, api_key, model)
 
 
 def _serialize_props(props: dict) -> dict:
@@ -102,60 +131,68 @@ async def semantic_search(question: str, top_k: Optional[int] = None) -> GraphRe
         raise ValueError("Vector index name not configured in settings")
 
     embedder = _get_embedder()
-    driver = GraphDatabase.driver(
+    from backend.nl2cypher import _get_cached_driver
+    driver = _get_cached_driver(
         s.get("neo4j_uri", "bolt://localhost:7687"),
-        auth=(s.get("neo4j_username", "neo4j"), s.get("neo4j_password", "")),
-        max_connection_lifetime=3600, max_connection_pool_size=10,
+        s.get("neo4j_username", "neo4j"),
+        s.get("neo4j_password", ""),
     )
-    try:
-        # 1. Vector search - fetch enough candidates, then filter by score
-        vretriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
-        raw = vretriever.get_search_results(query_text=question, top_k=max(top_k, 100))
 
-        # Filter by score threshold, keep minimum 3 results
-        scored = []
-        for record in raw.records:
-            eid = record.get("elementId")
-            score = record.get("score", 0)
-            if eid and score is not None:
-                scored.append((str(eid), score))
-        scored.sort(key=lambda x: x[1], reverse=True)
+    # 1. Vector search - fetch enough candidates, then filter by score
+    vretriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
+    raw = await asyncio.to_thread(
+        vretriever.get_search_results, query_text=question, top_k=max(top_k, 100)
+    )
 
-        print("=== [Semantic scores] ===", flush=True)
-        for eid, s in scored[:10]:
-            print(f"  score={s:.4f} eid={eid[:20]}...", flush=True)
+    # Filter by score threshold, keep minimum 3 results
+    scored = []
+    for record in raw.records:
+        eid = record.get("elementId")
+        score = record.get("score", 0)
+        if eid and score is not None:
+            scored.append((str(eid), score))
+    scored.sort(key=lambda x: x[1], reverse=True)
 
-        filtered = [eid for eid, s in scored if s >= threshold]
-        if not filtered and scored:
-            filtered = [scored[0][0]]
-            print(f"  [threshold={threshold} too high, fallback to top-1]", flush=True)
+    print("=== [Semantic scores] ===", flush=True)
+    for eid, s in scored[:10]:
+        print(f"  score={s:.4f} eid={eid[:20]}...", flush=True)
 
-        print(f"  threshold={threshold}, filtered={len(filtered)}, total_candidates={len(scored)}", flush=True)
-        node_ids = filtered[:top_k]
+    filtered = [eid for eid, s in scored if s >= threshold]
+    if not filtered and scored:
+        filtered = [scored[0][0]]
+        print(f"  [threshold={threshold} too high, fallback to top-1]", flush=True)
 
-        if not node_ids:
-            return GraphResponse(nodes=[], relationships=[])
+    print(f"  threshold={threshold}, filtered={len(filtered)}, total_candidates={len(scored)}", flush=True)
+    node_ids = filtered[:top_k]
 
-        # 2. Traverse from entry nodes with parameterized Cypher
-        if hops == 1:
-            traverse = """
+    if not node_ids:
+        return GraphResponse(nodes=[], relationships=[])
+
+    # 2. Traverse from entry nodes with parameterized Cypher
+    if hops == 1:
+        traverse = """
 MATCH (node) WHERE elementId(node) IN $node_ids
 OPTIONAL MATCH (node)-[r]-(related)
 WHERE related IS NOT NULL AND NOT related = node
 RETURN node, collect(DISTINCT r) AS rels, collect(DISTINCT related) AS related_nodes
 """
-        else:
-            traverse = f"""
+    else:
+        traverse = f"""
 MATCH (node) WHERE elementId(node) IN $node_ids
 OPTIONAL MATCH (node)-[r*1..{hops}]-(related)
 WHERE related IS NOT NULL AND NOT related = node
 UNWIND r AS single_rel
 RETURN node, collect(DISTINCT single_rel) AS rels, collect(DISTINCT related) AS related_nodes
 """
-        records, _ = await conn_manager.run_query(cypher=traverse, parameters={"node_ids": node_ids})
-        return _parse_records(records if records else [])
-    finally:
-        driver.close()
+    records, _ = await conn_manager.run_query(cypher=traverse, parameters={"node_ids": node_ids})
+    return _parse_records(records if records else [])
+
+
+def invalidate_schema_cache():
+    """Clear the no-samples schema cache (called when schema_include changes)."""
+    global _schema_cache_ns, _schema_cache_db_ns
+    _schema_cache_ns = None
+    _schema_cache_db_ns = None
 
 
 # ─── Interface 2: LLM-generated traversal ──────────────────────────────────
@@ -166,7 +203,7 @@ from backend.nl2cypher import _get_schema, _fix_unnamed_rels
 
 
 async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tuple[GraphResponse, str]:
-    """Vector search → LLM generates traversal Cypher → execute.
+    """Vector search �?LLM generates traversal Cypher �?execute.
 
     Returns (GraphResponse, generated_cypher).
     """
@@ -180,54 +217,57 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
         top_k = int(s.get("semantic_top_k", "10"))
 
     embedder = _get_embedder()
-    sync_driver = GraphDatabase.driver(uri, auth=(user, pwd), max_connection_lifetime=3600, max_connection_pool_size=10)
-    try:
-        # 1. Vector search with score threshold
-        threshold = float(s.get("semantic_score_threshold", "0.6"))
-        retriever = VectorRetriever(driver=sync_driver, index_name=index_name, embedder=embedder)
-        raw = retriever.get_search_results(query_text=question, top_k=max(top_k, 100))
+    from backend.nl2cypher import _get_cached_driver
+    sync_driver = _get_cached_driver(uri, user, pwd)
 
-        # Filter by score threshold
-        scored = []
-        for rec in raw.records:
-            eid = rec.get("elementId")
-            score = rec.get("score", 0)
-            node = rec.get("node", {})
-            node_labels = rec.get("nodeLabels", [])
-            if eid and isinstance(node, dict) and node:
-                scored.append((str(eid), score, node, node_labels))
-        scored.sort(key=lambda x: x[1], reverse=True)
+    # 1. Vector search with score threshold
+    threshold = float(s.get("semantic_score_threshold", "0.6"))
+    retriever = VectorRetriever(driver=sync_driver, index_name=index_name, embedder=embedder)
+    raw = await asyncio.to_thread(
+        retriever.get_search_results, query_text=question, top_k=max(top_k, 100)
+    )
 
-        filtered_records = [r for r in scored if r[1] >= threshold]
-        if not filtered_records and scored:
-            filtered_records = [scored[0]]
+    # Filter by score threshold
+    scored = []
+    for rec in raw.records:
+        eid = rec.get("elementId")
+        score = rec.get("score", 0)
+        node = rec.get("node", {})
+        node_labels = rec.get("nodeLabels", [])
+        if eid and isinstance(node, dict) and node:
+            scored.append((str(eid), score, node, node_labels))
+    scored.sort(key=lambda x: x[1], reverse=True)
 
-        # 2. Build entry node context
-        entry_lines = []
-        node_ids = []
-        for eid, score, node, node_labels in filtered_records[:top_k]:
-            node_ids.append(str(eid))
-            props_dict = {k: v for k, v in node.items() if k != "embedding"}
-            props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
-            labels_str = ", ".join(node_labels)
-            entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
-        entry_context = "\n".join(entry_lines) if entry_lines else "  (no nodes found)"
+    filtered_records = [r for r in scored if r[1] >= threshold]
+    if not filtered_records and scored:
+        filtered_records = [scored[0]]
 
-        # 3. Get schema
-        schema = _get_schema(sync_driver, db, include_samples=False)
-        from backend.nl2cypher import _get_examples
-        examples = _get_examples()
+    # 2. Build entry node context
+    entry_lines = []
+    node_ids = []
+    for eid, score, node, node_labels in filtered_records[:top_k]:
+        node_ids.append(str(eid))
+        props_dict = {k: v for k, v in node.items() if k != "embedding"}
+        props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
+        labels_str = ", ".join(node_labels)
+        entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
+    entry_context = "\n".join(entry_lines) if entry_lines else "  (no nodes found)"
 
-        # 4. Build prompt — prescriptive template forces LLM to use the entry node IDs
-        node_id_list = json.dumps(node_ids)
-        examples_str = "\n".join(examples) if examples else "(no examples)"
-        prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses relationships to answer the user question.
+    # 3. Get schema (cached in own module)
+    global _schema_cache_ns, _schema_cache_db_ns
+    if _schema_cache_ns is None or _schema_cache_db_ns != db:
+        schema = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples=False)
+        _schema_cache_ns = schema
+        _schema_cache_db_ns = db
+    else:
+        schema = _schema_cache_ns
+    node_id_list = json.dumps(node_ids)
+
+    # 4. Build prompt
+    prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses relationships to answer the user question.
 
 Schema:
 {schema}
-
-Examples:
-{examples_str}
 
 The entry nodes (start here):
 {entry_context}
@@ -247,27 +287,23 @@ Rules:
 - Add LIMIT 200
 - Only Cypher statement, no markdown"""
 
-        oai = OpenAIClient(
-            api_key=s.get("llm_api_key", ""),
-            base_url=s.get("llm_endpoint", "https://api.openai.com/v1") + "/",
-        )
-        resp = oai.chat.completions.create(
-            model=s.get("llm_model", "gpt-4o"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-        )
-        generated_cypher = resp.choices[0].message.content.strip()
-        # Strip markdown fences
-        if generated_cypher.startswith("```"):
-            generated_cypher = generated_cypher.split("\n", 1)[-1]
-            if "```" in generated_cypher:
-                generated_cypher = generated_cypher.rsplit("```", 1)[0]
-            generated_cypher = generated_cypher.strip()
+    from backend.llm_service import _call_llm_async
+    import os, datetime
+    _log_dir = os.path.join(os.path.dirname(__file__), "_prompt_logs")
+    os.makedirs(_log_dir, exist_ok=True)
+    _log_path = os.path.join(_log_dir, f"prompt_{datetime.datetime.now():%H%M%S%f}.txt")
+    with open(_log_path, "w", encoding="utf-8") as _f:
+        _f.write(prompt)
+    generated_cypher = await _call_llm_async(prompt, temperature=0, max_tokens=2048)
+    # Strip markdown fences
+    if generated_cypher.startswith("```"):
+        generated_cypher = generated_cypher.split("\n", 1)[-1]
+        if "```" in generated_cypher:
+            generated_cypher = generated_cypher.rsplit("```", 1)[0]
+        generated_cypher = generated_cypher.strip()
 
-        # 5. Execute (pass node_ids as parameter for $node_ids)
-        from backend.nl2cypher import _fix_unnamed_rels
-        generated_cypher = _fix_unnamed_rels(generated_cypher)
-        records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
-        return _parse_records(records), generated_cypher
-    finally:
-        sync_driver.close()
+    # 5. Execute (pass node_ids as parameter for $node_ids)
+    from backend.nl2cypher import _fix_unnamed_rels
+    generated_cypher = _fix_unnamed_rels(generated_cypher)
+    records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
+    return _parse_records(records), generated_cypher

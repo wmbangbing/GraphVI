@@ -1,3 +1,5 @@
+import json
+import json
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -10,7 +12,14 @@ from pydantic import BaseModel
 from neo4j import AsyncGraphDatabase
 
 from backend.database import conn_manager
-from backend.models import CypherQuery, GraphResponse, NodeDTO, RelationshipDTO, PresetCreate, PresetUpdate, PresetResponse, AnalyzeRequest, AnalyzeResponse, SettingsUpdate, NlQueryRequest, NlQueryResponse, Nl2CypherRequest, Nl2CypherResponse, HistoryAddRequest, SemanticQueryRequest, SemanticNLQueryRequest, SemanticNLQueryResponse
+from backend.models import (CypherQuery, GraphResponse, NodeDTO, RelationshipDTO,
+                    PresetCreate, PresetUpdate, PresetResponse,
+                    AnalyzeRequest, AnalyzeResponse, SettingsUpdate,
+                    NlQueryRequest, NlQueryResponse,
+                    Nl2CypherRequest, Nl2CypherResponse,
+                    HistoryAddRequest,
+                    SemanticQueryRequest, SemanticNLQueryRequest, SemanticNLQueryResponse,
+                    AutoAnalyzeRequest)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +36,12 @@ app = FastAPI(title="GraphVI API", version="1.0.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def strip_prefix_middleware(request, call_next):
+    """Strip deployment subpath prefix from API requests.
+
+    When Nginx proxies /<prefix>/api/xxx to the backend, the path arrives
+    as /<prefix>/api/xxx, which doesn't match any API route. This middleware
+    rewrites /<prefix>/api/xxx → /api/xxx before routing.
+    """
     path = request.url.path
     if path.count("/") >= 3 and "/api/" in path:
         api_idx = path.index("/api/")
@@ -169,6 +184,7 @@ from backend.llm_service import call_llm_stream, test_llm_connection
 
 @app.post("/api/analyze/test")
 async def analyze_test(body: dict | None = None):
+    """Test LLM connection with a simple prompt"""
     try:
         overrides = body or {}
         reply = await test_llm_connection(overrides or None)
@@ -240,6 +256,11 @@ async def list_settings():
 @app.put("/api/settings")
 async def update_settings(body: SettingsUpdate):
     set_multiple_settings(body.settings)
+    if "schema_include" in body.settings:
+        from backend.nl2cypher import invalidate_schema_cache as _inv1
+        from backend.semantic_search import invalidate_schema_cache as _inv2
+        _inv1()
+        _inv2()
     return {"status": "ok"}
 
 
@@ -262,13 +283,13 @@ async def execute_nl_query(body: NlQueryRequest):
 
 
 @app.post("/api/nl2cypher", response_model=Nl2CypherResponse)
-def nl2cypher_api(body: Nl2CypherRequest):
+async def nl2cypher_api(body: Nl2CypherRequest):
     """Generate Cypher from natural language, return only the Cypher statement."""
     if not body.question or not body.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     from backend.nl2cypher import generate_cypher_only
     try:
-        cypher = generate_cypher_only(body.question.strip())
+        cypher = await generate_cypher_only(body.question.strip())
         return Nl2CypherResponse(cypher=cypher)
     except Exception as e:
         logger.warning("NL2Cypher failed: %s", e)
@@ -305,7 +326,7 @@ async def semantic_query(body: SemanticQueryRequest):
 
 @app.post("/api/query/semantic/test")
 async def semantic_test(body: dict | None = None):
-    """Test embedding API connectivity."""
+    """Test embedding API connectivity. Checks: API reachable + model exists."""
     try:
         overrides = body or {}
         from backend.settings_db import get_all_settings
@@ -317,11 +338,23 @@ async def semantic_test(body: dict | None = None):
         if not api_key:
             raise ValueError("API Key 未配置")
 
-        from openai import OpenAI as OpenAIClient
-        client = OpenAIClient(api_key=api_key, base_url=endpoint.rstrip("/") + "/")
-        resp = client.embeddings.create(model=model, input="test")
-        dims = len(resp.data[0].embedding)
+        # 1. Test embedding API with a simple call (use httpx directly to avoid UA issues)
+        import httpx as _httpx
+        _r = _httpx.post(
+            endpoint.rstrip("/") + "/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            },
+            json={"model": model, "input": "test"},
+            timeout=30,
+        )
+        _r.raise_for_status()
+        _data = _r.json()
+        dims = len(_data["data"][0]["embedding"])
 
+        # 2. Check if vector index exists in Neo4j
         from backend.database import conn_manager as cm
         index_ok = False
         try:
@@ -334,17 +367,20 @@ async def semantic_test(body: dict | None = None):
             pass
 
         parts = [f"Embedding API 连接成功，模型 {model}，维度 {dims}"]
-        parts.append(f"向量索引「{vector_index}」{'存在' if index_ok else '不存在，请在 Neo4j 中手动创建'}")
+        if index_ok:
+            parts.append(f"向量索引「{vector_index}」存在")
+        else:
+            parts.append(f"向量索引「{vector_index}」不存在，请在 Neo4j 中手动创建")
 
         return {"status": "ok", "detail": "；".join(parts), "dimensions": dims, "index_exists": index_ok}
     except Exception as e:
         msg = str(e)
-        if "401" in msg or "unauthorized" in msg.lower():
+        if "401" in msg or "unauthorized" in msg.lower() or "auth" in msg.lower():
             msg = "API Key 无效或权限不足"
         elif "404" in msg or "not found" in msg.lower():
-            msg = "模型不存在或 API 地址错误"
+            msg = f"模型不存在或 API 地址错误"
         elif "connect" in msg.lower() or "timeout" in msg.lower():
-            msg = "无法连接到 API 地址，请检查网络"
+            msg = f"无法连接到 API 地址，请检查网络"
         raise HTTPException(status_code=400, detail=f"语义检索测试失败: {msg}")
 
 
@@ -365,6 +401,87 @@ async def semantic_nl_query(body: SemanticNLQueryRequest):
         raise HTTPException(status_code=400, detail=f"Semantic NL query error: {e}")
 
 
+
+@app.post("/api/query/auto")
+async def auto_analyze_endpoint(body: AutoAnalyzeRequest):
+    if not body.question or not body.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    try:
+        from backend.auto_analyzer import auto_analyze as _auto_analyze, auto_analyze_nonstream, auto_analyze_stream
+
+        if body.stream:
+            async def event_stream():
+                try:
+                    async for event in auto_analyze_stream(
+                        question=body.question.strip(),
+                        strategy=body.strategy,
+                        top_k=body.top_k,
+                        score_threshold=body.score_threshold,
+                        analyze_prompt=body.analyze_prompt,
+                        summary_prompt=body.summary_prompt,
+                    ):
+                        ev_type = event.get("event", "")
+                        data = event.get("data", {})
+                        yield f"event: {ev_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    logger.warning("Auto analyze stream error: %s", e)
+                    yield f"event: error\ndata: {json.dumps({'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        else:
+            result = await auto_analyze_nonstream(
+                question=body.question.strip(),
+                strategy=body.strategy,
+                top_k=body.top_k,
+                score_threshold=body.score_threshold,
+                analyze_prompt=body.analyze_prompt,
+                summary_prompt=body.summary_prompt,
+            )
+            return result
+    except Exception as e:
+        logger.warning("Auto analyze failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Auto analyze error: {e}")
+
+
+@app.get("/api/schema/types")
+async def get_schema_types():
+    """Return all node types and relationship types from Neo4j schema."""
+    try:
+        from backend.database import conn_manager as _cm
+        from backend.nl2cypher import _get_cached_driver
+        s = get_all_settings()
+        uri = s.get("neo4j_uri", "bolt://localhost:7687")
+        user = s.get("neo4j_username", "neo4j")
+        pwd = s.get("neo4j_password", "")
+        db = s.get("neo4j_database", "neo4j")
+
+        sync_driver = _get_cached_driver(uri, user, pwd)
+        import asyncio as _asyncio
+
+        def _query_schema():
+            with sync_driver.session(database=db) as session:
+                n_rows = list(session.run("CALL db.schema.nodeTypeProperties()"))
+                r_rows = list(session.run("CALL db.schema.relTypeProperties()"))
+            n_types = sorted(set(lbl for row in n_rows for lbl in (row["nodeLabels"] or [])
+                                 if lbl not in ("_Embeddable",)))
+            r_types = sorted(set(rt.strip(":`") for row in r_rows
+                                 if (rt := row["relType"]) and rt.strip(":`")))
+            return n_types, r_types
+
+        node_types, rel_types = await _asyncio.to_thread(_query_schema)
+        return {"node_types": node_types, "rel_types": rel_types}
+    except Exception as e:
+        logger.warning("Get schema types failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Get schema types error: {e}")
+
+
 class ConnectBody(BaseModel):
     uri: str = "bolt://localhost:7687"
     username: str = "neo4j"
@@ -374,6 +491,7 @@ class ConnectBody(BaseModel):
 
 @app.post("/api/connect")
 async def test_connect(body: ConnectBody, save: bool = False):
+    """Test Neo4j connection. If save=True, persist config and reconnect."""
     try:
         driver = AsyncGraphDatabase.driver(
             body.uri,
@@ -386,7 +504,6 @@ async def test_connect(body: ConnectBody, save: bool = False):
         await driver.close()
 
         if save:
-            from backend.settings_db import set_multiple_settings
             set_multiple_settings({
                 "neo4j_uri": body.uri,
                 "neo4j_username": body.username,
@@ -409,12 +526,14 @@ async def health():
 
 # Serve frontend static files with SPA fallback for Vue Router routes.
 # Must be defined AFTER all API routes so they take precedence.
+# Catch-all route: serve matching file, or index.html for SPA routing.
 dist_path = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if dist_path.exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404)
+        # Try direct path, then strip subpath prefixes (for /graphvi/assets/xxx → /assets/xxx)
         target = dist_path / full_path if full_path else dist_path
         if target.is_file():
             return FileResponse(target)

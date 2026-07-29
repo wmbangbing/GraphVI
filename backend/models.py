@@ -115,3 +115,20 @@ class SemanticNLQueryResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class AutoAnalyzeRequest(BaseModel):
+    question: str
+    strategy: str = "auto"
+    top_k: int | None = None
+    score_threshold: float | None = None
+    analyze_prompt: str | None = None
+    summary_prompt: str | None = None
+    stream: bool = False
+
+
+class AutoAnalyzeResponse(BaseModel):
+    result: str
+    strategy_used: str
+    stats_summary: dict = {}
+    generated_cypher: str | None = None

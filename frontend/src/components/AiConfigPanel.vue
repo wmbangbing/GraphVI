@@ -20,12 +20,101 @@ const config = ref({
   semantic_score_threshold: 0.6,
   semantic_top_k: 10,
   enable_script_stats: "false",
+  auto_default_strategy: "auto",
+  auto_analyze_prompt: "",
+  auto_parallel_timeout: 40,
+  ignored_label: "_Embeddable",
+  auto_semantic_top_k: 10,
+  auto_semantic_score_threshold: 0.6,
+  cache_ttl: 300,
+  schema_include: "",
 });
 const saving = ref(false);
 const testing = ref(false);
 const testResult = ref(null);
 const semanticTesting = ref(false);
 const semanticTestResult = ref(null);
+
+// Schema config
+const schemaAllTypes = ref({ node_types: [], rel_types: [] });
+const schemaLoading = ref(false);
+const savedSchemaInclude = ref({ node_types: [], rel_types: [] });
+
+async function fetchSchemaTypes() {
+  schemaLoading.value = true;
+  try {
+    const res = await fetch(apiUrl("/api/schema/types"));
+    if (res.ok) {
+      const data = await res.json();
+      schemaAllTypes.value = data;
+      // Save full list to settings for next page load
+      await fetch(apiUrl(SETTINGS_API), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: { schema_types: JSON.stringify(data) } }),
+      });
+    }
+  } catch {}
+  schemaLoading.value = false;
+}
+
+function parseSchemaInclude(str) {
+  if (!str) return { node_types: [], rel_types: [] };
+  try { return JSON.parse(str); } catch { return { node_types: [], rel_types: [] }; }
+}
+
+function _updateSchemaInclude(newSel) {
+  savedSchemaInclude.value = newSel;
+  config.value.schema_include = JSON.stringify(newSel);
+}
+
+function toggleSchemaNode(type) {
+  const sel = { ...savedSchemaInclude.value };
+  if (sel.node_types.includes(type)) {
+    sel.node_types = sel.node_types.filter(t => t !== type);
+  } else {
+    sel.node_types = [...sel.node_types, type];
+  }
+  _updateSchemaInclude(sel);
+}
+
+function toggleSchemaRel(type) {
+  const sel = { ...savedSchemaInclude.value };
+  if (sel.rel_types.includes(type)) {
+    sel.rel_types = sel.rel_types.filter(t => t !== type);
+  } else {
+    sel.rel_types = [...sel.rel_types, type];
+  }
+  _updateSchemaInclude(sel);
+}
+
+function selectAllNodes() {
+  _updateSchemaInclude({
+    ...savedSchemaInclude.value,
+    node_types: [...schemaAllTypes.value.node_types],
+  });
+}
+
+function deselectAllNodes() {
+  _updateSchemaInclude({
+    ...savedSchemaInclude.value,
+    node_types: [],
+  });
+}
+
+function selectAllRels() {
+  _updateSchemaInclude({
+    ...savedSchemaInclude.value,
+    rel_types: [...schemaAllTypes.value.rel_types],
+  });
+}
+
+function deselectAllRels() {
+  _updateSchemaInclude({
+    ...savedSchemaInclude.value,
+    rel_types: [],
+  });
+}
 
 async function fetchSettings() {
   try {
@@ -46,7 +135,20 @@ async function fetchSettings() {
       semantic_score_threshold: Number(data.semantic_score_threshold) || 0.6,
       semantic_top_k: Number(data.semantic_top_k) || 10,
       enable_script_stats: data.enable_script_stats || "false",
+      auto_default_strategy: data.auto_default_strategy || "auto",
+      auto_analyze_prompt: data.auto_analyze_prompt || "",
+      auto_parallel_timeout: Number(data.auto_parallel_timeout) || 8,
+      ignored_label: data.ignored_label || "_Embeddable",
+      auto_semantic_top_k: Number(data.auto_semantic_top_k) || 10,
+      auto_semantic_score_threshold: Number(data.auto_semantic_score_threshold) || 0.6,
+      cache_ttl: Number(data.cache_ttl) || 300,
+      schema_include: data.schema_include || "",
     };
+    savedSchemaInclude.value = parseSchemaInclude(data.schema_include);
+    // Load cached full type list from DB
+    if (data.schema_types) {
+      try { schemaAllTypes.value = JSON.parse(data.schema_types); } catch {}
+    }
   } catch {
     ElMessage.error("获取配置失败");
   }
@@ -118,6 +220,10 @@ async function saveSettings() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ settings: config.value }),
     });
+    // Sync ignored_label to localStorage for GraphView
+    if (config.value.ignored_label) {
+      localStorage.setItem("ignored_label", config.value.ignored_label);
+    }
     ElMessage.success("配置已保存");
   } catch {
     ElMessage.error("保存配置失败");
@@ -222,6 +328,104 @@ onMounted(fetchSettings);
       <el-button size="small" :loading="semanticTesting" @click="testSemantic">测试向量检索</el-button>
       <div v-if="semanticTestResult" class="test-result" :class="{ success: semanticTestResult.ok, error: !semanticTestResult.ok }">
         {{ semanticTestResult.message }}
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">智能查询分析</h3>
+      <p class="config-section-desc">
+        用于 <code>/api/query/auto</code> 接口的默认配置
+      </p>
+      <el-form label-position="top" size="small">
+        <el-form-item label="默认策略">
+          <el-select v-model="config.auto_default_strategy" size="small">
+            <el-option label="LLM 分类 (auto)" value="auto" />
+            <el-option label="并行择优 (parallel)" value="parallel" />
+            <el-option label="顺序尝试 (sequential)" value="sequential" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="并行检索超时 (秒)">
+          <el-input-number v-model="config.auto_parallel_timeout" :min="5" :max="120" size="small" />
+        </el-form-item>
+        <el-form-item label="语义检索 top_k">
+          <el-input-number v-model="config.auto_semantic_top_k" :min="1" :max="200" size="small" />
+        </el-form-item>
+        <el-form-item label="语义检索分数阈值">
+          <el-input-number v-model="config.auto_semantic_score_threshold" :min="0" :max="1" :step="0.05" size="small" />
+        </el-form-item>
+      </el-form>
+      <el-form-item label="专题分析提示词（可选）">
+        <p class="config-section-desc">
+          用于 LLM 生成 Python 统计脚本的领域上下文，留空使用内置默认（英文，应急指挥领域）
+        </p>
+        <el-input
+          v-model="config.auto_analyze_prompt"
+          type="textarea"
+          :rows="6"
+          placeholder="留空使用内置默认提示词（英文）"
+        />
+      </el-form-item>
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">全局设置</h3>
+      <el-form label-position="top" size="small">
+        <el-form-item label="忽略的节点标签">
+          <el-input v-model="config.ignored_label" placeholder="_Embeddable" />
+        </el-form-item>
+        <p class="config-section-desc">
+          Neo4j 向量索引等自动添加的标签，在取节点主标签时跳过。多个标签用逗号分隔
+        </p>
+        <el-form-item label="查询结果缓存(秒)">
+          <el-input-number v-model="config.cache_ttl" :min="0" :max="3600" size="small" />
+        </el-form-item>
+        <p class="config-section-desc">
+          相同问题的查询结果缓存时间。设为 0 则不缓存
+        </p>
+      </el-form>
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">Schema 配置</h3>
+      <p class="config-section-desc">
+        勾选需要参与查询的节点类型和关系类型，减少 LLM 处理的 token 量
+        <el-button size="small" :loading="schemaLoading" @click="fetchSchemaTypes" style="margin-left:8px">
+          刷新
+        </el-button>
+      </p>
+
+      <div v-if="schemaAllTypes.node_types.length > 0" style="margin-bottom:8px">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px">节点类型</div>
+        <div style="margin-bottom:4px">
+          <el-button size="small" @click="selectAllNodes">全选</el-button>
+          <el-button size="small" @click="deselectAllNodes">取消全选</el-button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:200px;overflow-y:auto">
+          <el-checkbox
+            v-for="t in schemaAllTypes.node_types"
+            :key="t"
+            :checked="savedSchemaInclude.node_types.includes(t)"
+            @change="toggleSchemaNode(t)"
+            size="small"
+          >{{ t }}</el-checkbox>
+        </div>
+      </div>
+
+      <div v-if="schemaAllTypes.rel_types.length > 0">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px">关系类型</div>
+        <div style="margin-bottom:4px">
+          <el-button size="small" @click="selectAllRels">全选</el-button>
+          <el-button size="small" @click="deselectAllRels">取消全选</el-button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;max-height:200px;overflow-y:auto">
+          <el-checkbox
+            v-for="t in schemaAllTypes.rel_types"
+            :key="t"
+            :checked="savedSchemaInclude.rel_types.includes(t)"
+            @change="toggleSchemaRel(t)"
+            size="small"
+          >{{ t }}</el-checkbox>
+        </div>
       </div>
     </div>
 

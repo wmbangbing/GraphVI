@@ -6,8 +6,10 @@ import httpx
 from settings_db import get_all_settings
 
 
-def _aggregate_stats(nodes: list, relationships: list) -> dict:
+def _aggregate_stats(nodes: list, relationships: list, ignored_label: str = "") -> dict:
     """Auto-aggregate all numeric fields - works with any graph schema."""
+    from utils import primary_label as _pl
+
     stats = {
         "total_nodes": len(nodes),
         "total_relationships": len(relationships),
@@ -19,7 +21,7 @@ def _aggregate_stats(nodes: list, relationships: list) -> dict:
         "numeric_maxs": {},
     }
     for n in nodes:
-        lbl = (n.get("labels") or ["?"])[0]
+        lbl = _pl(n.get("labels") or ["?"], ignored_label)
         stats["nodes_by_label"][lbl] = stats["nodes_by_label"].get(lbl, 0) + 1
     for r in relationships:
         rt = r.get("type", "?")
@@ -27,7 +29,7 @@ def _aggregate_stats(nodes: list, relationships: list) -> dict:
 
     groups = {}
     for n in nodes:
-        lbl = (n.get("labels") or ["?"])[0]
+        lbl = _pl(n.get("labels") or ["?"], ignored_label)
         groups.setdefault(lbl, []).append(n)
 
     for lbl, items in groups.items():
@@ -102,10 +104,26 @@ def _call_llm_sync(prompt: str, temperature: float = 0.1, max_tokens: int = 8192
         f"{endpoint}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]
+
+
+async def _call_llm_async(prompt: str, temperature: float = 0.1, max_tokens: int = 8192) -> str:
+    """Async version of _call_llm_sync — non-blocking."""
+    s = get_all_settings()
+    endpoint = s.get("llm_endpoint", "https://api.openai.com/v1").rstrip("/")
+    api_key = s.get("llm_api_key", "")
+    model = s.get("llm_model", "gpt-4o")
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{endpoint}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
 
 
 def _safe_exec(script: str, nodes: list, relationships: list) -> dict:

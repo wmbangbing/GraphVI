@@ -1,6 +1,6 @@
 services:
   graphvi:
-    image: graphvi:latest
+    image: graphvi-image:latest
     ports:
       - "8000:8000"
     environment:

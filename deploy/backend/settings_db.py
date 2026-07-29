@@ -32,7 +32,7 @@ def init_settings_table():
         "neo4j_username": "neo4j",
         "neo4j_password": "adminadmin",
         "neo4j_database": "kmdevelop",
-        "nl_query_prompt": "Task: Generate a Cypher statement for querying a Neo4j knowledge graph.\n\nSchema:\n{schema}\n\nExamples:\n{examples}\n\nUser question:\n{query_text}\n\nRules:\n1. When the user asks for \"all information\" or \"detailed info\" about a specific entity, use variable-length matching [*1..2] to include connected nodes and relationships.\n2. When using variable-length matching, RETURN individual node and relationship variables instead of a path.\n   Example: MATCH (n:Label {{prop: 'value'}})-[*1..2]-(m) RETURN n, m  — NOT RETURN path\n3. When the user asks about relationships between specific entities, use specific relationship patterns.\n4. For simple listing queries, use basic MATCH with appropriate labels.\n5. ONLY use read-only statements: MATCH, RETURN, WHERE, LIMIT, ORDER BY, SKIP.\n6. NEVER use CREATE, DELETE, SET, MERGE, REMOVE, DETACH.\n7. Use node labels and relationship types from the schema only. Do not invent labels.\n8. Always add LIMIT (default 100).\n9. Return only the Cypher statement, no explanations or markdown.\n10. ALWAYS give each relationship a variable name in MATCH and include all\n    relationship variables in RETURN.\n    Correct: MATCH (n)-[r:REL]->(m) RETURN n, r, m\n    Incorrect: MATCH (n)-[:REL]->(m) RETURN n, m\n\nCypher query:\n",
+        "nl_query_prompt": "Task: Generate a Cypher statement for querying a Neo4j knowledge graph.\n\nSchema:\n{schema}\n\nExamples:\n{examples}\n\nUser question:\n{query_text}\n\nRules:\n1. When the user asks for \"all information\" or \"detailed info\" about a specific entity, use variable-length matching [*1..2] to include connected nodes and relationships.\n2. When using variable-length matching, RETURN individual node and relationship variables instead of a path.\n   Example: MATCH (n:Label {{prop: 'value'}})-[*1..2]-(m) RETURN n, m  — NOT RETURN path\n3. When the user asks about relationships between specific entities, use specific relationship patterns.\n4. For simple listing queries, use basic MATCH with appropriate labels.\n5. ONLY use read-only statements: MATCH, RETURN, WHERE, LIMIT, ORDER BY, SKIP.\n6. NEVER use CREATE, DELETE, SET, MERGE, REMOVE, DETACH.\n7. Use node labels and relationship types from the schema only. Do not invent labels.\n8. Always add LIMIT (default 100).\n9. Return only the Cypher statement, no explanations or markdown.\n10. ALWAYS give each relationship a variable name in MATCH and include all\n    relationship variables in RETURN.\n    Correct: MATCH (n)-[r:REL]->(m) RETURN n, r, m\n    Incorrect: MATCH (n)-[:REL]->(m) RETURN n, m\n11. NEVER use datetime() function. Date/time fields are strings — use string comparison (STARTS WITH, CONTAINS, >=, <=) instead.\n\nCypher query:\n",
         "nl_schema_examples": "false",
         "embedding_endpoint": "https://api.openai.com/v1",
         "embedding_api_key": "",
@@ -42,6 +42,17 @@ def init_settings_table():
         "enable_script_stats": "false",
         "semantic_score_threshold": "0.6",
         "semantic_top_k": "10",
+        # --- auto analyze ---
+        "auto_default_strategy": "auto",
+        "auto_analyze_prompt": "",
+        "auto_parallel_timeout": "40",
+        "auto_semantic_top_k": "10",
+        "auto_semantic_score_threshold": "0.6",
+        # --- global ---
+        "ignored_label": "_Embeddable",
+        "cache_ttl": "300",
+        "schema_include": "",
+        "schema_types": "",
     }
     for key, value in defaults.items():
         conn.execute(

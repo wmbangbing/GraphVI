@@ -1,19 +1,51 @@
 """Natural language to Cypher query using neo4j-graphrag Text2CypherRetriever"""
 
+import asyncio
 from neo4j import GraphDatabase
 from neo4j_graphrag.llm import OpenAILLM
 from neo4j_graphrag.retrievers import Text2CypherRetriever
 
 from backend.settings_db import get_all_settings
 
-_schema_cache = None
+_schema_cache = None       # with samples (for nl2cypher)
 _schema_cache_db = None
+_schema_cache_ns = None    # without samples (for semantic_nl)
+_schema_cache_db_ns = None
+_sync_driver = None
+_sync_driver_key = ""
 
 
 def invalidate_schema_cache():
-    global _schema_cache, _schema_cache_db
+    global _schema_cache, _schema_cache_db, _schema_cache_ns, _schema_cache_db_ns, _sync_driver
     _schema_cache = None
     _schema_cache_db = None
+    _schema_cache_ns = None
+    _schema_cache_db_ns = None
+    if _sync_driver is not None:
+        try:
+            _sync_driver.close()
+        except Exception:
+            pass
+        _sync_driver = None
+
+
+def _get_cached_driver(uri: str, user: str, pwd: str):
+    """Get or create a cached sync Neo4j driver, reused across requests."""
+    global _sync_driver, _sync_driver_key
+    key = f"{uri}|{user}|{pwd}"
+    if _sync_driver is None or _sync_driver_key != key:
+        if _sync_driver is not None:
+            try:
+                _sync_driver.close()
+            except Exception:
+                pass
+        _sync_driver = GraphDatabase.driver(
+            uri, auth=(user, pwd),
+            max_connection_lifetime=3600,
+            max_connection_pool_size=10,
+        )
+        _sync_driver_key = key
+    return _sync_driver
 
 
 def _get_label_samples(session, label_name: str) -> dict:
@@ -42,9 +74,12 @@ def _get_schema(driver, database: str, include_samples: bool = False) -> str:
             labels = tuple(row["nodeLabels"])
             if labels not in node_props:
                 node_props[labels] = []
+            pname = row["propertyName"]
+            if pname == "embedding":
+                continue
             ptype = row["propertyTypes"]
             ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
-            node_props[labels].append(f"{row['propertyName']}: {ptype_str}")
+            node_props[labels].append(f"{pname}: {ptype_str}")
         for props in node_props.values():
             props.sort()
         rel_rows = list(session.run("CALL db.schema.relTypeProperties()"))
@@ -54,18 +89,46 @@ def _get_schema(driver, database: str, include_samples: bool = False) -> str:
             rt = row["relType"]
             if rt not in rel_props:
                 rel_props[rt] = []
+            pname = row["propertyName"]
+            if pname is None:
+                continue
             ptype = row["propertyTypes"]
             ptype_str = ptype[0].replace(" NOT NULL", "") if ptype else "ANY"
-            rel_props[rt].append(f"{row['propertyName']}: {ptype_str}")
+            rel_props[rt].append(f"{pname}: {ptype_str}")
         for props in rel_props.values():
             props.sort()
+
         viz = list(session.run("CALL db.schema.visualization()"))
         rel_patterns = set()
+        s_all = get_all_settings()
+        _ignored = s_all.get("ignored_label", "_Embeddable")
+        _keep_rels = set()
+
+        # Apply schema_include filter (reuse s_all to avoid extra DB read)
+        import json as _json
+        _si = (s_all.get("schema_include") or "")
+        if _si:
+            try:
+                _inc = _json.loads(_si)
+                _keep_nodes = set(_inc.get("node_types", []))
+                _keep_rels = set(_inc.get("rel_types", []))
+                if _keep_nodes:
+                    node_props = {k: v for k, v in node_props.items() if any(l in _keep_nodes for l in k)}
+                if _keep_rels:
+                    rel_props = {k: v for k, v in rel_props.items() if k in _keep_rels}
+            except (_json.JSONDecodeError, TypeError):
+                pass
+
         if viz:
             for rel in viz[0]["relationships"]:
-                start = list(rel.start_node.labels)[0] if rel.start_node.labels else "?"
-                end = list(rel.end_node.labels)[0] if rel.end_node.labels else "?"
-                rel_patterns.add(f"(:{start})-[:{rel.type}]->(:{end})")
+                rt = rel.type.strip(":`")
+                if _keep_rels and rt not in _keep_rels:
+                    continue
+                start_labels = list(rel.start_node.labels) if rel.start_node.labels else ["?"]
+                end_labels = list(rel.end_node.labels) if rel.end_node.labels else ["?"]
+                start = next((l for l in start_labels if l != _ignored), start_labels[0])
+                end = next((l for l in end_labels if l != _ignored), end_labels[0])
+                rel_patterns.add(f"(:{start})-[:{rt}]->(:{end})")
         lines = ["Node properties:"]
         for labels, props in node_props.items():
             if not labels:
@@ -246,28 +309,25 @@ async def nl2cypher(question: str) -> dict:
     if not custom_prompt:
         custom_prompt = None
     include_samples = s.get("nl_schema_examples", "false") == "true"
-    sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
-    try:
-        if _schema_cache is None or _schema_cache_db != db:
-            _schema_cache = _get_schema(sync_driver, db, include_samples)
-            _schema_cache_db = db
-        llm = _get_llm()
-        examples = _get_examples()
-        retriever = Text2CypherRetriever(
-            driver=sync_driver, llm=llm, neo4j_schema=_schema_cache,
-            examples=examples, custom_prompt=custom_prompt, neo4j_database=db,
-        )
-        result = retriever.search(query_text=question)
-        generated_cypher = result.metadata.get("cypher", "")
-        generated_cypher = _fix_unnamed_rels(generated_cypher)
-        from backend.database import conn_manager
-        records, _ = await conn_manager.run_query(cypher=generated_cypher)
-        return {"generated_cypher": generated_cypher, "records": records or []}
-    finally:
-        sync_driver.close()
+    sync_driver = _get_cached_driver(uri, user, pwd)
+    if _schema_cache is None or _schema_cache_db != db:
+        _schema_cache = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples)
+        _schema_cache_db = db
+    llm = _get_llm()
+    examples = _get_examples()
+    retriever = Text2CypherRetriever(
+        driver=sync_driver, llm=llm, neo4j_schema=_schema_cache,
+        examples=examples, custom_prompt=custom_prompt, neo4j_database=db,
+    )
+    result = await asyncio.to_thread(retriever.search, query_text=question)
+    generated_cypher = result.metadata.get("cypher", "")
+    generated_cypher = _fix_unnamed_rels(generated_cypher)
+    from backend.database import conn_manager
+    records, _ = await conn_manager.run_query(cypher=generated_cypher)
+    return {"generated_cypher": generated_cypher, "records": records or []}
 
 
-def generate_cypher_only(question: str) -> str:
+async def generate_cypher_only(question: str) -> str:
     global _schema_cache, _schema_cache_db
     from datetime import datetime as _dt
     question = f"[Current time: {_dt.now().strftime('%Y-%m-%d %H:%M')}] {question}"
@@ -280,18 +340,15 @@ def generate_cypher_only(question: str) -> str:
     if not custom_prompt:
         custom_prompt = None
     include_samples = s.get("nl_schema_examples", "false") == "true"
-    sync_driver = GraphDatabase.driver(uri, auth=(user, pwd))
-    try:
-        if _schema_cache is None or _schema_cache_db != db:
-            _schema_cache = _get_schema(sync_driver, db, include_samples)
-            _schema_cache_db = db
-        llm = _get_llm()
-        examples = _get_examples()
-        retriever = Text2CypherRetriever(
-            driver=sync_driver, llm=llm, neo4j_schema=_schema_cache,
-            examples=examples, custom_prompt=custom_prompt, neo4j_database=db,
-        )
-        result = retriever.search(query_text=question)
-        return _fix_unnamed_rels(result.metadata.get("cypher", ""))
-    finally:
-        sync_driver.close()
+    sync_driver = _get_cached_driver(uri, user, pwd)
+    if _schema_cache is None or _schema_cache_db != db:
+        _schema_cache = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples)
+        _schema_cache_db = db
+    llm = _get_llm()
+    examples = _get_examples()
+    retriever = Text2CypherRetriever(
+        driver=sync_driver, llm=llm, neo4j_schema=_schema_cache,
+        examples=examples, custom_prompt=custom_prompt, neo4j_database=db,
+    )
+    result = await asyncio.to_thread(retriever.search, query_text=question)
+    return _fix_unnamed_rels(result.metadata.get("cypher", ""))
