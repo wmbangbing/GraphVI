@@ -53,7 +53,7 @@ def build_tree_text(graph_data, ignored_label: str = "") -> str:
     for r in graph_data.relationships:
         outgoing.setdefault(r.source, []).append((r.type, r.target))
 
-        all_with_rels = {r.source for r in graph_data.relationships} | {r.target for r in graph_data.relationships}
+    all_with_rels = {r.source for r in graph_data.relationships} | {r.target for r in graph_data.relationships}
     all_targets = {r.target for r in graph_data.relationships}
     isolated_ids = {n.id for n in graph_data.nodes} - all_with_rels
     roots = [n for n in graph_data.nodes
