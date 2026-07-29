@@ -1,6 +1,7 @@
 """Semantic search using VectorCypherRetriever (fixed template) + semantic NL search (LLM traversal)"""
 
 import asyncio
+import httpx
 from neo4j import GraphDatabase
 from neo4j_graphrag.retrievers import VectorRetriever, VectorCypherRetriever
 from neo4j_graphrag.embeddings import OpenAIEmbeddings
@@ -12,27 +13,52 @@ from backend.models import GraphResponse, NodeDTO, RelationshipDTO
 # Schema cache for semantic_nl (no samples, own module to avoid cross-module assignment issues)
 _schema_cache_ns = None
 _schema_cache_db_ns = None
+_embed_client = None
+_embed_client_key = ""
+
+
+def _invalidate_embed_client():
+    """Force recreation of the cached embedding httpx client."""
+    global _embed_client, _embed_client_key
+    if _embed_client is not None:
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            pass
+        _embed_client = None
+    _embed_client_key = ""
+
+
+def _get_embed_client(endpoint: str, api_key: str) -> httpx.Client:
+    """Get or create a cached sync httpx client for embedding API calls."""
+    global _embed_client, _embed_client_key
+    key = f"{endpoint}|{api_key[:8]}"
+    if _embed_client is None or _embed_client_key != key:
+        _embed_client = httpx.Client(
+            timeout=30,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            },
+        )
+        _embed_client_key = key
+    return _embed_client
 
 
 class _HttpxEmbedder:
-    """Custom embedder using httpx directly, bypasses openai library UA issues."""
+    """Custom embedder using httpx directly, with connection reuse."""
     def __init__(self, endpoint: str, api_key: str, model: str):
         self._endpoint = endpoint.rstrip("/")
         self._api_key = api_key
         self._model = model
-        self._ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
     def embed_query(self, text: str) -> list[float]:
-        import httpx
-        r = httpx.post(
+        client = _get_embed_client(self._endpoint, self._api_key)
+        r = client.post(
             f"{self._endpoint}/embeddings",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": self._ua,
-            },
             json={"model": self._model, "input": text},
-            timeout=30,
         )
         r.raise_for_status()
         return r.json()["data"][0]["embedding"]
@@ -284,7 +310,7 @@ Rules:
 - Keep WHERE elementId(entry) IN {node_id_list} exactly as given
 - Use OPTIONAL MATCH (not MATCH) so entry nodes are always returned
 - RETURN entry, related nodes, and relationship variables
-- Add LIMIT 200
+- Add LIMIT 1000
 - Only Cypher statement, no markdown"""
 
     from backend.llm_service import _call_llm_async
