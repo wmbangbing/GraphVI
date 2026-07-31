@@ -107,7 +107,7 @@ def _call_llm_sync(prompt: str, temperature: float = 0.1, max_tokens: int = 8192
     resp = httpx.post(
         f"{endpoint}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+        json={"model": model, "thinking": {"type": "disabled"}, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
         timeout=120,
     )
     resp.raise_for_status()
@@ -143,7 +143,7 @@ async def _call_llm_async(prompt: str, temperature: float = 0.1, max_tokens: int
     client = _get_llm_client(endpoint, api_key)
     resp = await client.post(
         f"{endpoint}/chat/completions",
-        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+        json={"model": model, "thinking": {"type": "disabled"}, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]

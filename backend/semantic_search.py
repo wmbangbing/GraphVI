@@ -10,9 +10,6 @@ from settings_db import get_all_settings
 from database import conn_manager
 from models import GraphResponse, NodeDTO, RelationshipDTO
 
-# Schema cache for semantic_nl (no samples, own module to avoid cross-module assignment issues)
-_schema_cache_ns = None
-_schema_cache_db_ns = None
 _embed_client = None
 _embed_client_key = ""
 
@@ -89,14 +86,46 @@ def _serialize_props(props: dict) -> dict:
 
 
 def _parse_records(records: list) -> GraphResponse:
-    """Extract Node/Relationship objects from Neo4j records (same as main.py)."""
+    """Extract Node/Relationship objects from Neo4j records (same as main.py).
+
+    Supports BOTH native Neo4j Node/Relationship objects AND map-format nodes
+    produced by the APOC embedding-exclusion fix:
+      {id: elementId, labels: [...], props: {...}}
+    """
     nodes_map: dict[str, NodeDTO] = {}
     rels_map: dict[str, RelationshipDTO] = {}
+
+    def extract_map_node(val):
+        """Recognize {id, labels, props} map nodes (from APOC removeKeys fix)."""
+        if not isinstance(val, dict):
+            return None
+        if "props" in val and ("labels" in val or "id" in val):
+            props = _serialize_props(dict(val.get("props") or {}))
+            props.pop("embedding", None)
+            nid = str(val.get("id", ""))
+            labels = list(val.get("labels") or [])
+            if not nid:
+                return None
+            caption = (props.get("name") or props.get("title") or props.get("event_name")
+                       or props.get("person_name") or props.get("equipment_name")
+                       or props.get("vehicle_name") or (list(props.values())[0] if props else ""))
+            return NodeDTO(id=nid, labels=labels, properties=props, caption=str(caption))
+        return None
 
     def walk(val):
         if val is None:
             return
+        # Map-format node (APOC wrapped) — check before generic dict walk
+        mn = extract_map_node(val)
+        if mn and mn.id:
+            if mn.id not in nodes_map:
+                nodes_map[mn.id] = mn
+            return
         if hasattr(val, "labels") and hasattr(val, "element_id"):
+            # Skip stub nodes (relationship endpoints inside collect() have no
+            # labels/props) — they'd produce empty graph nodes.
+            if not val.labels:
+                return
             props = _serialize_props(dict(val))
             props.pop("embedding", None)
             nid = str(val.element_id)
@@ -215,17 +244,42 @@ RETURN node, collect(DISTINCT single_rel) AS rels, collect(DISTINCT related) AS 
 
 
 def invalidate_schema_cache():
-    """Clear the no-samples schema cache (called when schema_include changes)."""
-    global _schema_cache_ns, _schema_cache_db_ns
-    _schema_cache_ns = None
-    _schema_cache_db_ns = None
+    """Clear the shared schema cache (called when schema_include changes)."""
+    from nl2cypher import invalidate_schema_cache as _invalidate_nl_schema
+    _invalidate_nl_schema()
 
 
 # ─── Interface 2: LLM-generated traversal ──────────────────────────────────
 
 import json
 from openai import OpenAI as OpenAIClient
-from nl2cypher import _get_schema, _fix_unnamed_rels
+from nl2cypher import get_schema, _fix_unnamed_rels
+
+
+def _inject_entry_labels(cypher: str, entry_labels: list[str]) -> str:
+    """Add label constraints to the entry MATCH so the planner can use the
+    RANGE index on entry.id.
+
+    Without a label, `MATCH (entry) WHERE entry.id IN [...]` scans every node
+    (10M+) — measured ~15-17s. With the label it uses the RANGE index and runs
+    in <1s. Single label: `(entry)` -> `(entry:Label)`. Multiple labels: keep
+    the bare entry but add an OR filter so the planner uses index-union.
+    """
+    import re as _re
+    if not entry_labels or "entry.id IN" not in cypher:
+        return cypher
+    if len(entry_labels) == 1:
+        lbl = entry_labels[0]
+        return _re.sub(
+            r"MATCH\s*\(\s*entry\s*\)\s*WHERE\s+entry\.id\s+IN",
+            f"MATCH (entry:{lbl}) WHERE entry.id IN", cypher, count=1)
+    m = _re.search(r"MATCH\s*\(\s*entry\s*\)\s*WHERE\s+entry\.id\s+IN\s*(\[[^\]]*\])", cypher)
+    if not m:
+        return cypher
+    or_clause = " OR ".join(f"entry:{l}" for l in entry_labels)
+    return (cypher[:m.start()] +
+            f"MATCH (entry) WHERE entry.id IN {m.group(1)} AND ({or_clause})" +
+            cypher[m.end():])
 
 
 async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tuple[GraphResponse, str]:
@@ -233,6 +287,8 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
 
     Returns (GraphResponse, generated_cypher).
     """
+    import time as _time
+    _t_start = _time.monotonic()
     s = get_all_settings()
     uri = s.get("neo4j_uri", "bolt://localhost:7687")
     user = s.get("neo4j_username", "neo4j")
@@ -269,28 +325,27 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
         filtered_records = [scored[0]]
 
     # 2. Build entry node context
+    # Use the node's `id` property (UUID, RANGE-indexed) for querying, not elementId.
     entry_lines = []
     node_ids = []
+    entry_labels: list[str] = []
     for eid, score, node, node_labels in filtered_records[:top_k]:
-        node_ids.append(str(eid))
         props_dict = {k: v for k, v in node.items() if k != "embedding"}
+        uid = str(props_dict.get("id", eid))  # indexed UUID field
+        node_ids.append(uid)
+        entry_labels.extend(l for l in (node_labels or []) if l != "_Embeddable")
         props_str = ", ".join(f"{k}: {v}" for k, v in props_dict.items())
         labels_str = ", ".join(node_labels)
-        entry_lines.append(f"  [{labels_str}] elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
+        entry_lines.append(f"  [{labels_str}] id: {uid} elementId: {eid} {{{props_str}}}  [score: {score:.4f}]")
+    entry_labels = sorted(set(entry_labels))
     entry_context = "\n".join(entry_lines) if entry_lines else "  (no nodes found)"
 
-    # 3. Get schema (cached in own module)
-    global _schema_cache_ns, _schema_cache_db_ns
-    if _schema_cache_ns is None or _schema_cache_db_ns != db:
-        schema = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples=False)
-        _schema_cache_ns = schema
-        _schema_cache_db_ns = db
-    else:
-        schema = _schema_cache_ns
+    # 3. Get schema (shared cache with nl2cypher)
+    schema = await get_schema(sync_driver, db, include_samples=False)
     node_id_list = json.dumps(node_ids)
 
     # 4. Build prompt
-    prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses relationships to answer the user question.
+    prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses ONLY the relationships needed to answer the user question.
 
 Schema:
 {schema}
@@ -301,16 +356,40 @@ The entry nodes (start here):
 User question:
 {question}
 
-CRITICAL: Start with the EXACT pattern:
-  MATCH (entry) WHERE elementId(entry) IN {node_id_list}
-Then use OPTIONAL MATCH to traverse relationships from entry.
-Do NOT add any extra WHERE conditions on the entry node.
+CRITICAL SELECTIVITY RULES:
+- Traverse ONLY the relationship chains that are semantically relevant to the question.
+  Ignore unrelated relationship types entirely.
+- MINIMIZE the number of CALL subqueries (usually 1-3). Do NOT enumerate every
+  relationship type from the schema.
+- Example: if the question only asks about parent/child events, use ONLY PARENT_OF,
+  e.g. MATCH (entry)-[:PARENT_OF]->(child_event) and/or <-[:PARENT_OF]-(parent_event).
+  Do NOT traverse dispatch / work-order / attachment relationships in that case.
+
+When you DO need a CALL, use this form (EXPLICIT scope, one CALL per relevant chain):
+  CALL (entry) {{
+    OPTIONAL MATCH (entry)-[:RELEVANT_REL]->(n1:Label1)-...->(target:LabelN)
+    RETURN collect(DISTINCT target) AS name
+  }}
+
+Structure:
+  MATCH (entry) WHERE entry.id IN {node_id_list}
+  CALL (entry) {{
+    OPTIONAL MATCH (entry)-[:RELEVANT_REL]->(...)->(target)
+    RETURN collect(DISTINCT target) AS name
+  }}
+  RETURN name
+  LIMIT 1000
 
 Rules:
-- Keep WHERE elementId(entry) IN {node_id_list} exactly as given
-- Use OPTIONAL MATCH (not MATCH) so entry nodes are always returned
-- RETURN entry, related nodes, and relationship variables
-- Add LIMIT 1000
+- Start with: MATCH (entry) WHERE entry.id IN {node_id_list}
+  (entry.id is the indexed UUID property. Do NOT use elementId(entry).)
+- Use CALL (entry) {{ ... }} with EXPLICIT variable scope in parentheses.
+  Do NOT use CALL {{ WITH entry ... }} — the old implicit-scope form is deprecated.
+- Use OPTIONAL MATCH (not MATCH) inside CALL so entry is always returned
+- Use full paths in each CALL, don't split a chain across multiple CALLs
+- RETURN collect(DISTINCT target) AS name for each terminal target
+- The main RETURN only needs the alias names from each CALL's RETURN
+- Add LIMIT 1000 at the end
 - Only Cypher statement, no markdown"""
 
     from llm_service import _call_llm_async
@@ -320,7 +399,10 @@ Rules:
     _log_path = os.path.join(_log_dir, f"prompt_{datetime.datetime.now():%H%M%S%f}.txt")
     with open(_log_path, "w", encoding="utf-8") as _f:
         _f.write(prompt)
-    generated_cypher = await _call_llm_async(prompt, temperature=0, max_tokens=2048)
+    _t_llm_start = _time.monotonic()
+    generated_cypher = await _call_llm_async(prompt, temperature=0, max_tokens=8192)
+    _t_llm_end = _time.monotonic()
+    print(f"=== [SemanticNL] LLM 调用耗时: {_t_llm_end - _t_llm_start:.2f}s ===", flush=True)
     # Strip markdown fences
     if generated_cypher.startswith("```"):
         generated_cypher = generated_cypher.split("\n", 1)[-1]
@@ -331,5 +413,12 @@ Rules:
     # 5. Execute (pass node_ids as parameter for $node_ids)
     from nl2cypher import _fix_unnamed_rels
     generated_cypher = _fix_unnamed_rels(generated_cypher)
+    # Inject label constraints so the entry lookup uses the RANGE index (10x+
+    # faster than the unlabelled full scan on a 10M-node graph).
+    generated_cypher = _inject_entry_labels(generated_cypher, entry_labels)
+    _t_cypher_start = _time.monotonic()
     records, _ = await conn_manager.run_query(cypher=generated_cypher, parameters={"node_ids": node_ids})
+    _t_cypher_end = _time.monotonic()
+    print(f"=== [SemanticNL] Neo4j 查询耗时: {_t_cypher_end - _t_cypher_start:.2f}s ===", flush=True)
+    print(f"=== [SemanticNL] 总耗时: {_t_cypher_end - _t_start:.2f}s ===", flush=True)
     return _parse_records(records), generated_cypher

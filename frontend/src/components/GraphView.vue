@@ -616,7 +616,11 @@ function initGraph() {
     setTimeout(() => {
       try {
         graphInstance.zoomToFit(400, 40);
-        setTimeout(() => { if (graphInstance.zoom() > 3) graphInstance.zoom(3, 200); }, 500);
+        if (dimension.value === "2d") {
+          setTimeout(() => {
+            if (graphInstance.zoom() > 3) graphInstance.zoom(3, 200);
+          }, 500);
+        }
       } catch {}
     }, 500);
   } catch (e) {

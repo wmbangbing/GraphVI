@@ -1,5 +1,6 @@
 import json
 import json
+import asyncio
 import logging
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -27,8 +28,46 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    await conn_manager.close_all()
+    # Background-prewarm the shared schema cache so the first real request
+    # doesn't pay the (slow, ~43s) db.schema.nodeTypeProperties() call.
+    prewarm_task = asyncio.create_task(_prewarm_schema())
+    try:
+        yield
+    finally:
+        if not prewarm_task.done():
+            prewarm_task.cancel()
+        await conn_manager.close_all()
+
+
+async def _prewarm_schema():
+    """Prefetch Neo4j schema for both nl2cypher (with samples) and semantic_nl
+    (without samples) into the shared cache. Non-blocking; failures are logged
+    and skipped so startup is never blocked.
+    """
+    try:
+        logger.info("正在预热 Neo4j schema 缓存...")
+        s = get_all_settings()
+        uri = s.get("neo4j_uri", "bolt://localhost:7687")
+        user = s.get("neo4j_username", "neo4j")
+        pwd = s.get("neo4j_password", "")
+        db = s.get("neo4j_database", "neo4j")
+        if not uri or not pwd:
+            logger.warning("Neo4j 配置未就绪，跳过 schema 预热（等待前端配置连接）")
+            return
+
+        from nl2cypher import _get_cached_driver, get_schema
+        sync_driver = _get_cached_driver(uri, user, pwd)
+
+        # Fetch the schema ONCE (with samples if enabled, else the base schema).
+        # The other variant is derived from the same cache (stripping samples),
+        # so startup never runs db.schema.* twice.
+        include_samples = s.get("nl_schema_examples", "false") == "true"
+        await get_schema(sync_driver, db, include_samples=include_samples)
+        logger.info(f"schema 预热完成（nl2cypher, samples={'on' if include_samples else 'off'}）")
+        await get_schema(sync_driver, db, include_samples=False)
+        logger.info("schema 预热完成（semantic_nl, 不带 samples）")
+    except Exception as e:
+        logger.warning(f"schema 预热失败（将按需获取）: {e}")
 
 
 app = FastAPI(title="GraphVI API", version="1.0.0", lifespan=lifespan)

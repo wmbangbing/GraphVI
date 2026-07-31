@@ -3,7 +3,7 @@
 import json
 import httpx
 
-from settings_db import get_all_settings
+from backend.settings_db import get_all_settings
 
 # Global cached async httpx client for LLM calls
 _llm_client = None
@@ -12,7 +12,7 @@ _llm_client_key = ""
 
 def _aggregate_stats(nodes: list, relationships: list, ignored_label: str = "") -> dict:
     """Auto-aggregate all numeric fields - works with any graph schema."""
-    from utils import primary_label as _pl
+    from backend.utils import primary_label as _pl
 
     stats = {
         "total_nodes": len(nodes),
@@ -107,7 +107,7 @@ def _call_llm_sync(prompt: str, temperature: float = 0.1, max_tokens: int = 8192
     resp = httpx.post(
         f"{endpoint}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+        json={"model": model, "thinking": {"type": "disabled"}, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
         timeout=120,
     )
     resp.raise_for_status()
@@ -143,7 +143,7 @@ async def _call_llm_async(prompt: str, temperature: float = 0.1, max_tokens: int
     client = _get_llm_client(endpoint, api_key)
     resp = await client.post(
         f"{endpoint}/chat/completions",
-        json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
+        json={"model": model, "thinking": {"type": "disabled"}, "messages": [{"role": "user", "content": prompt}], "temperature": temperature, "max_tokens": max_tokens},
     )
     resp.raise_for_status()
     return resp.json()["choices"][0]["message"]["content"]

@@ -151,6 +151,34 @@ def _get_schema(driver, database: str, include_samples: bool = False) -> str:
         return "\n".join(lines)
 
 
+def _strip_sample_lines(schema: str) -> str:
+    """Remove `Sample:` lines from a with-samples schema string."""
+    return "\n".join(l for l in schema.splitlines() if not l.lstrip().startswith("Sample:"))
+
+
+async def get_schema(sync_driver, database: str, include_samples: bool = False) -> str:
+    """Shared schema cache for nl2cypher AND semantic_nl_search.
+
+    A single underlying fetch is reused: the with-samples variant is fetched
+    once, and the without-samples variant is derived from it by stripping the
+    `Sample:` lines — so the schema is never fetched from Neo4j twice.
+    """
+    global _schema_cache, _schema_cache_db, _schema_cache_ns, _schema_cache_db_ns
+    if include_samples:
+        if _schema_cache is None or _schema_cache_db != database:
+            _schema_cache = await asyncio.to_thread(_get_schema, sync_driver, database, True)
+            _schema_cache_db = database
+        return _schema_cache
+    # Without samples: derive from the with-samples cache when available.
+    if _schema_cache_ns is None or _schema_cache_db_ns != database:
+        if _schema_cache is not None and _schema_cache_db == database:
+            _schema_cache_ns = _strip_sample_lines(_schema_cache)
+        else:
+            _schema_cache_ns = await asyncio.to_thread(_get_schema, sync_driver, database, False)
+        _schema_cache_db_ns = database
+    return _schema_cache_ns
+
+
 def _get_llm():
     s = get_all_settings()
     return OpenAILLM(
@@ -179,17 +207,71 @@ def _get_examples() -> list[str]:
 import re
 
 
+def _apoc_map_expr(var: str) -> str:
+    """Cypher expression wrapping a NODE into {id, labels, props} without embedding."""
+    return (f"(CASE WHEN {var} IS NULL THEN null ELSE "
+            f"{{id: elementId({var}), labels: labels({var}), "
+            f"props: apoc.map.removeKeys({var}, ['embedding'])}} END)")
+
+
+def _wrap_return_apoc(cypher: str) -> str:
+    """v2: wrap top-level RETURN node collections as APOC maps to exclude embedding.
+
+    Only the FINAL RETURN is wrapped (internal CALLs keep real nodes so UNWIND
+    reuse works). Generic: detects node-collection aliases via
+    `collect(DISTINCT node_var) AS alias` where node_var is a node (from `(v:`).
+    """
+    if "RETURN" not in cypher:
+        return cypher
+
+    # Anchor on the FINAL (main) RETURN so node_vars covers ALL CALL subquery
+    # variables. Using the FIRST RETURN would only see the first CALL's vars,
+    # leaving later aliases (e.g. parent_events) unwrapped and leaking embedding.
+    _main_ret = cypher.rindex("RETURN")
+    match_section = cypher[:_main_ret]
+    node_vars = set(re.findall(r"\((\w+):", match_section)) | set(re.findall(r"\((\w+)\)", match_section))
+    rel_vars = set(re.findall(r"\[(\w+):", match_section))
+    all_aliases = set(re.findall(r"\bAS\s+(\w+)", cypher))
+
+    # Which aliases are node collections? collect(DISTINCT node_var) AS alias.
+    # Skip `_path_N` aliases — the fix-generated mixed collections (nodes + rels)
+    # that cannot be wrapped as pure node maps.
+    node_aliases = set()
+    for m in re.finditer(r"collect\(\s*DISTINCT\s+(\w+)\s*\)\s*AS\s+(\w+)", cypher):
+        var, alias = m.group(1), m.group(2)
+        if var in node_vars and var not in rel_vars and not alias.startswith("_path_"):
+            node_aliases.add(alias)
+
+    ret_pos = cypher.rindex("RETURN")
+    main_ret = cypher[ret_pos:]
+    lim_split = main_ret.split("LIMIT")
+    ret_cols = lim_split[0][len("RETURN"):]
+    rest = " LIMIT" + lim_split[1] if len(lim_split) > 1 else ""
+
+    cols = [c.strip() for c in ret_cols.split(",")]
+    new_cols = []
+    for c in cols:
+        if not c:
+            continue
+        if c in node_aliases:
+            new_cols.append(f"[x IN {c} | {_apoc_map_expr('x')}]")
+        elif c in node_vars and c not in all_aliases and not c.startswith("_path_"):
+            new_cols.append(_apoc_map_expr(c))
+        else:
+            new_cols.append(c)
+    return cypher[:ret_pos] + "RETURN " + ", ".join(new_cols) + rest
+
+
 def _fix_unnamed_rels(cypher: str) -> str:
     """Post-process Cypher for graph rendering completeness.
     - Names anonymous nodes and relationships in MATCH/OPTIONAL MATCH
     - Converts directed relationships to undirected
     - Ensures RETURN includes all variables from MATCH clauses
+    - Handles CALL { ... } subqueries (name + orphan collection)
     """
+    # ── Naming engine ──────────────────────────────────────────────────────
     existing_vars = {m for match in re.findall(r"\((\w+):|\[(\w+):", cypher) for m in match if m}
-
-    # Generate unique variable names
-    rel_idx = [0]
-    node_idx = [0]
+    rel_idx, node_idx = [0], [0]
 
     def _unique_name(prefix, idx_list):
         while True:
@@ -199,97 +281,236 @@ def _fix_unnamed_rels(cypher: str) -> str:
                 existing_vars.add(name)
                 return name
 
-    # Step 1: Find all MATCH/OPTIONAL MATCH blocks, excluding subqueries
-    # Extract text before RETURN to only process MATCH sections
-    before_return = cypher
-    ret_pos = -1
-    # Only use RETURN as delimiter. WITH is excluded because it appears
-    # inside string literals like STARTS WITH / ENDS WITH / CONTAINS.
-    m = re.search(r"\bRETURN\b", cypher)
-    if m:
-        ret_pos = m.start()
-    if ret_pos > 0:
-        before_return = cypher[:ret_pos]
+    def _name_node(text):
+        return re.sub(r"\(:(\w+)\)", lambda m: f"({_unique_name('n', node_idx)}:{m.group(1)})", text)
 
+    def _name_rels(text):
+        for pat in [
+            r"-\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*->",
+            r"<-\s*\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*-",
+            r"-\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*-",
+        ]:
+            text = re.sub(pat, lambda m, p=pat: f"-[{_unique_name('r', rel_idx)}:{m.group(1)}]-" if "->" not in p else
+                          f"-[{_unique_name('r', rel_idx)}:{m.group(1)}]->" if p.startswith("-") else
+                          f"<-[{_unique_name('r', rel_idx)}:{m.group(1)}]-", text)
+        return text
+
+    def _undirect(text):
+        t = re.sub(r"(\[[\w]+:[^\]]*\])\s*->", r"\1-", text)
+        t = re.sub(r"<-\s*(\[[\w]+:[^\]]*\])", r"-\1", t)
+        return t
+
+    def _fix_block(text):
+        """Run naming + undirect on a text block."""
+        t = _name_node(text)
+        t = _name_rels(t)
+        t = _undirect(t)
+        return t
+
+    # ── Step 0: Safety limit on unbounded variable-length paths ─────────
+    # Replace [:REL*0..] with bounded [:REL*1..3] to prevent exponential
+    # path explosion (common LLM-generated anti-pattern).
+    cypher = re.sub(r'\[([^:]*):(\w+)\*0\.\.\]', r'[\1:\2*1..3]', cypher)
+
+    # ── Step 1: Handle CALL subqueries (must be processed first) ──────────
     print("=== [Cypher before fix] ===", flush=True)
     print(cypher, flush=True)
-    fixed = cypher
 
-    # Step 2: In MATCH sections, name anonymous nodes (:Label) -> (n1:Label)
-    def _name_anon_node(m):
-        name = _unique_name("n", node_idx)
-        return f"({name}:{m.group(1)})"
+    # Support both `CALL { ... }` (implicit scope) and `CALL (entry) { ... }`
+    # (Neo4j 5.26 explicit scope) forms.
+    _CALL_RE = r"\bCALL\s*(?:\(\s*[A-Za-z_]\w*\s*\))?\s*\{"
+    has_call = bool(re.search(_CALL_RE, cypher))
 
-    if before_return:
-        match_area = fixed[:ret_pos] if ret_pos > 0 else fixed
-        named = re.sub(r"\(:(\w+)\)", _name_anon_node, match_area)
-        fixed = named + fixed[ret_pos:] if ret_pos > 0 else named
+    if has_call:
+        # Extract CALL blocks
+        call_blocks = []
+        work = cypher
+        while True:
+            m = re.search(_CALL_RE, work)
+            if not m: break
+            depth, pos = 1, m.end()
+            while pos < len(work) and depth > 0:
+                if work[pos] == '{': depth += 1
+                elif work[pos] == '}': depth -= 1
+                pos += 1
+            call_blocks.append(work[m.start():pos])
+            work = work[:m.start()] + f"__CALL_BLOCK_{len(call_blocks)-1}__" + work[pos:]
 
-    # Step 3: Name anonymous relationships [:TYPE] -> [r1:TYPE]
-    def _name_anon_rel(m):
-        name = _unique_name("r", rel_idx)
-        return f"[{name}:{m.group(1)}]"
+        # Fix non-CALL outer parts (naming/undirect)
+        fixed = _fix_block(work)
 
-    # Process MATCH area only for relationships too
-    match_area_end = ret_pos if ret_pos > 0 else len(fixed)
-    match_text = fixed[:match_area_end]
+        # Fix each CALL block independently
+        _KW = {'WITH','OPTIONAL','MATCH','RETURN','LIMIT','ORDER','BY','SKIP','WHERE',
+               'AND','OR','NOT','IN','AS','DISTINCT','COLLECT','collect','UNWIND','CASE',
+               'WHEN','THEN','ELSE','END','NULL','TRUE','FALSE','entries','entry','ALL',
+               'REDUCE','acc','lst'}
 
-    # Name outgoing unnamed: -[:TYPE]->
-    named_rel = re.sub(
-        r"-\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*->",
-        lambda m: f"-[{_unique_name('r', rel_idx)}:{m.group(1)}]->",
-        match_text,
-    )
-    # Name incoming unnamed: <-[:TYPE]-
-    named_rel = re.sub(
-        r"<-\s*\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*-",
-        lambda m: f"<-[{_unique_name('r', rel_idx)}:{m.group(1)}]-",
-        named_rel,
-    )
-    # Name undirected unnamed: -[:TYPE]- (no -> or <-)
-    named_rel = re.sub(
-        r"-\[\s*:([\w|*:]+(?:\s*\|\s*:?[\w|*:]+)*)\s*\]\s*-",
-        lambda m: f"-[{_unique_name('r', rel_idx)}:{m.group(1)}]-",
-        named_rel,
-    )
-    fixed = named_rel + fixed[match_area_end:]
+        fixed_bodies = []
+        for idx, body in enumerate(call_blocks):
+            brace_s = body.index('{')
+            brace_e = body.rindex('}') + 1
+            prefix = body[:brace_s]
+            inner = body[brace_s:brace_e]
 
-    # Step 4: Normalize direction to undirected in MATCH/OPTIONAL MATCH
-    only_match = fixed[:match_area_end]
-    undirected = re.sub(
-        r"(\[[\w]+:[^\]]*\])\s*->",
-        lambda m: m.group(1) + "-",
-        only_match,
-    )
-    undirected = re.sub(
-        r"<-\s*(\[[\w]+:[^\]]*\])",
-        lambda m: "-" + m.group(1),
-        undirected,
-    )
-    fixed = undirected + fixed[match_area_end:]
+            inner_fixed = _fix_block(inner)
 
-    # Step 5: Collect all variables from MATCH nodes and rels
-    match_vars = set()
-    # All node variables: (varname: ...) within MATCH/OPTIONAL MATCH
-    node_matches = re.findall(r"\((\w+):", fixed[:match_area_end])
-    match_vars.update(node_matches)
-    # All relationship variables: [varname: ...] within MATCH
-    rel_matches = re.findall(r"\[(\w+):", fixed[:match_area_end])
-    match_vars.update(rel_matches)
+            # Add orphan vars to this CALL's RETURN
+            ret_m = re.search(r"(\bRETURN\s+)(.+?)(?:\s*(?:$|(?=\})))",
+                              inner_fixed, re.IGNORECASE | re.DOTALL)
+            if ret_m:
+                # Collect all orphan node/rel variables and pack into ONE alias per CALL
+                mv = set(re.findall(r"\((\w+):", inner_fixed[:ret_m.start()]))
+                mv |= set(re.findall(r"\[(\w+):", inner_fixed[:ret_m.start()]))
+                ret_cols = [c.strip() for c in re.split(r"\s*,\s*", ret_m.group(2))]
+                ret_aliases = set()
+                for c in ret_cols:
+                    p = c.strip().split()
+                    if p: ret_aliases.add(p[-1].rstrip(','))
+                wm = re.search(r"\bWITH\s+(.+?)(?=\b(?:OPTIONAL|MATCH|RETURN|UNWIND)\b)",
+                               inner_fixed, re.IGNORECASE)
+                wv = set(re.findall(r'\b([a-zA-Z_]\w*)\b', wm.group(1))) if wm else set()
+                # Vars already consumed by collect(DISTINCT v) AS alias — skip them,
+                # so e.g. `collect(DISTINCT child_event) AS child_events` isn't packed
+                # again into the _path_N orphan collection. Scan the WHOLE CALL block
+                # (collect() lives inside RETURN, after ret_m.start()).
+                collected_vars = set(re.findall(r"collect\(\s*DISTINCT\s+(\w+)",
+                                                inner_fixed))
+                orphans = sorted(v for v in mv if v not in wv and v not in ret_aliases
+                                 and v not in collected_vars and v not in _KW)
+                if orphans:
+                    # Pack all orphans into ONE collect per CALL block to reduce RETURN columns
+                    packed = " + ".join(f"collect(DISTINCT {v})" for v in orphans)
+                    adds = f"{packed} AS _path_{idx}"
+                    inner_fixed = inner_fixed[:ret_m.end()] + ",\n" + adds + inner_fixed[ret_m.end():]
 
-    # Step 6: Ensure RETURN includes all match_vars
-    ret_match = re.search(
-        r"(RETURN\s+)(.+?)(?:\s+(?:LIMIT|ORDER|SKIP|WITH)\b|\s*$)",
-        fixed,
-        re.IGNORECASE,
-    )
-    if ret_match and match_vars:
-        ret_cols = [c.strip() for c in re.split(r"\s*,\s*", ret_match.group(2))]
-        missing = [v for v in sorted(match_vars) if v not in ret_cols]
-        if missing:
-            fixed = (fixed[:ret_match.start(2)] +
-                     ", ".join(ret_cols + missing) +
-                     fixed[ret_match.end(2):])
+            fixed_bodies.append(prefix + inner_fixed)
+
+        # Put CALL blocks back
+        for idx, body in enumerate(fixed_bodies):
+            fixed = fixed.replace(f"__CALL_BLOCK_{idx}__", body, 1)
+
+        # Propagate aliases through post-CALL WITH
+        all_aliases = set(re.findall(r'\b(_[a-zA-Z]\w*_\d+)\b', fixed))
+        if "}" in fixed:
+            after_calls = fixed[fixed.rindex("}")+1:]
+            wm = re.search(r"\bWITH\b", after_calls)
+            if wm and all_aliases:
+                abs_pos = fixed.index(after_calls) + wm.start()
+                after_w = fixed[abs_pos+4:]
+                wce = re.search(r"(?=\b(?:OPTIONAL|MATCH|RETURN|LIMIT|ORDER|SKIP|WITH|CALL|UNWIND)\b)",
+                                after_w, re.IGNORECASE)
+                wc_end = abs_pos + 4 + (wce.start() if wce else len(after_w))
+                existing = set(re.findall(r'\b([a-zA-Z_]\w*)\b', fixed[abs_pos:wc_end])) - _KW
+                missing = sorted(a for a in all_aliases if a not in existing)
+                if missing:
+                    fixed = fixed[:wc_end] + ",\n" + ",\n".join(missing) + fixed[wc_end:]
+
+        # Add aliases to main RETURN
+        if all_aliases and "LIMIT" in fixed and "RETURN" in fixed:
+            ret_section = fixed[fixed.rindex("RETURN"):fixed.rindex("LIMIT")]
+            aliases_in_ret = set(re.findall(r'\b(_[a-zA-Z]\w*_\d+)\b', ret_section))
+            still_missing = sorted(all_aliases - aliases_in_ret)
+            if still_missing:
+                fixed = (fixed[:fixed.rindex("LIMIT")] + ",\n" + ",\n".join(still_missing) + "\n" +
+                         fixed[fixed.rindex("LIMIT"):])
+
+        # Ensure entry node is in RETURN (entry always exists in outer scope after MATCH)
+        if "LIMIT" in fixed and "RETURN" in fixed:
+            main_ret = fixed[fixed.rindex("RETURN"):fixed.rindex("LIMIT")]
+            has_entry = bool(re.search(r'\b(?<![a-zA-Z_])entry(?![a-zA-Z_.])', main_ret))
+            has_entries = bool(re.search(r'\bentries\b', main_ret))
+            if not has_entry and not has_entries:
+                fixed = fixed[:fixed.rindex("LIMIT")] + ",\nentry\n" + fixed[fixed.rindex("LIMIT"):]
+
+    else:
+        # ── Step 2-6: Non-CALL processing (original logic) ────────────────
+        ret_pos = -1
+        m = re.search(r"\bRETURN\b", cypher)
+        if m: ret_pos = m.start()
+        before_return = cypher[:ret_pos] if ret_pos > 0 else cypher
+
+        fixed = cypher
+
+        if before_return:
+            match_area = fixed[:ret_pos] if ret_pos > 0 else fixed
+            fixed = _name_node(match_area) + fixed[ret_pos:] if ret_pos > 0 else _name_node(match_area)
+
+        match_area_end = ret_pos if ret_pos > 0 else len(fixed)
+        match_text = fixed[:match_area_end]
+        fixed = _name_rels(match_text) + fixed[match_area_end:]
+
+        only_match = fixed[:match_area_end]
+        fixed = _undirect(only_match) + fixed[match_area_end:]
+
+        # Collect all match variables
+        match_vars = set(re.findall(r"\((\w+):", fixed[:match_area_end]))
+        match_vars |= set(re.findall(r"\[(\w+):", fixed[:match_area_end]))
+
+        has_with = bool(re.search(r"\bWITH\b", re.sub(
+            r"\b(STARTS|ENDS|CONTAINS)\s+WITH\b", "", before_return, flags=re.IGNORECASE)))
+
+        if has_with and match_vars:
+            _KW = {'WITH','OPTIONAL','MATCH','RETURN','LIMIT','ORDER','BY','SKIP','WHERE',
+                   'AND','OR','NOT','IN','AS','DISTINCT','COLLECT','collect','UNWIND','CASE',
+                   'WHEN','THEN','ELSE','END','NULL','TRUE','FALSE', 'CALL','YIELD'}
+            # Find non-"STARTS WITH" WITH clauses
+            with_starts = []
+            for m in re.finditer(r"\bWITH\b", fixed):
+                before = fixed[max(0, m.start()-12):m.start()]
+                if not re.search(r"\b(STARTS|ENDS|CONTAINS)\s*$", before, re.IGNORECASE):
+                    with_starts.append(m.start())
+
+            carried = {}
+            for i, ws in enumerate(with_starts):
+                anchor = with_starts[i-1] if i > 0 else 0
+                seg_text = fixed[anchor:ws]
+                seg_vars = set(re.findall(r"\((\w+):", seg_text)) | set(re.findall(r"\[(\w+):", seg_text))
+                seg_vars.discard("entry")
+
+                after_with = fixed[ws+4:]
+                wce = re.search(r"(?=\b(?:OPTIONAL|MATCH|RETURN|LIMIT|ORDER|SKIP|WITH|CALL|UNWIND)\b)",
+                                after_with, re.IGNORECASE)
+                wc_end = ws + 4 + (wce.start() if wce else len(after_with))
+                with_ids = set(re.findall(r'\b([a-zA-Z_]\w*)\b', fixed[ws:wc_end])) - _KW
+                orphans = {v for v in (seg_vars - with_ids) if f"_{v}" not in carried}
+
+                if orphans:
+                    adds = sorted(f"collect(DISTINCT {v}) AS _{v}" for v in orphans)
+                    insert = ",\n" + ",\n".join(adds) + "\n"
+                    fixed = fixed[:wc_end] + insert + fixed[wc_end:]
+                    for v in orphans:
+                        carried[f"_{v}"] = v
+                    offset = len(insert)
+                    for j in range(i+1, len(with_starts)):
+                        with_starts[j] += offset
+
+            # Add carried aliases to RETURN
+            ret_match = re.search(r"(RETURN\s+)(.+?)(?:\s+(?:LIMIT|ORDER|SKIP|WITH)\b|\s*$)",
+                                  fixed, re.IGNORECASE)
+            if ret_match and carried:
+                ret_cols = [c.strip() for c in re.split(r"\s*,\s*", ret_match.group(2))]
+                now_ret = {c.split()[-1] for c in ret_cols}
+                missing_aliases = sorted(a for a in carried if a not in now_ret)
+                if missing_aliases:
+                    fixed = (fixed[:ret_match.start(2)] + ", ".join(ret_cols + missing_aliases) +
+                             fixed[ret_match.end(2):])
+
+        elif not has_with:
+            ret_match = re.search(r"(RETURN\s+)(.+?)(?:\s+(?:LIMIT|ORDER|SKIP|WITH)\b|\s*$)",
+                                  fixed, re.IGNORECASE)
+            if ret_match and match_vars:
+                ret_cols = [c.strip() for c in re.split(r"\s*,\s*", ret_match.group(2))]
+                missing = sorted(v for v in match_vars if v not in ret_cols)
+                if missing:
+                    fixed = (fixed[:ret_match.start(2)] + ", ".join(ret_cols + missing) +
+                             fixed[ret_match.end(2):])
+
+    # ── Step 7 (v2): wrap top-level RETURN node collections as APOC maps ──
+    # Excludes the embedding field from network transfer. Keeps internal CALLs
+    # with real nodes (so UNWIND reuse still works); only the FINAL RETURN wraps.
+    # Generic: detects node-collection aliases via `collect(DISTINCT node) AS a`.
+    if "RETURN" in fixed:
+        fixed = _wrap_return_apoc(fixed)
 
     print("=== [Cypher after fix] ===", flush=True)
     print(fixed, flush=True)
@@ -310,9 +531,7 @@ async def nl2cypher(question: str) -> dict:
         custom_prompt = None
     include_samples = s.get("nl_schema_examples", "false") == "true"
     sync_driver = _get_cached_driver(uri, user, pwd)
-    if _schema_cache is None or _schema_cache_db != db:
-        _schema_cache = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples)
-        _schema_cache_db = db
+    _schema_cache = await get_schema(sync_driver, db, include_samples)
     llm = _get_llm()
     examples = _get_examples()
     retriever = Text2CypherRetriever(
@@ -341,9 +560,7 @@ async def generate_cypher_only(question: str) -> str:
         custom_prompt = None
     include_samples = s.get("nl_schema_examples", "false") == "true"
     sync_driver = _get_cached_driver(uri, user, pwd)
-    if _schema_cache is None or _schema_cache_db != db:
-        _schema_cache = await asyncio.to_thread(_get_schema, sync_driver, db, include_samples)
-        _schema_cache_db = db
+    _schema_cache = await get_schema(sync_driver, db, include_samples)
     llm = _get_llm()
     examples = _get_examples()
     retriever = Text2CypherRetriever(
