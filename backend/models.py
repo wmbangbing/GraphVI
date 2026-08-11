@@ -99,12 +99,12 @@ class Nl2CypherResponse(BaseModel):
 
 class SemanticQueryRequest(BaseModel):
     question: str
-    top_k: int = 10
+    top_k: int | None = None   # None → backend uses semantic_top_k setting
 
 
 class SemanticNLQueryRequest(BaseModel):
     question: str
-    top_k: int = 5
+    top_k: int | None = None   # None → backend uses semantic_top_k setting
 
 
 class SemanticNLQueryResponse(BaseModel):

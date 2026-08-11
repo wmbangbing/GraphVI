@@ -181,9 +181,12 @@ async def get_schema(sync_driver, database: str, include_samples: bool = False) 
 
 def _get_llm():
     s = get_all_settings()
+    # extra_body disables reasoning mode on deepseek models — without it the
+    # reasoning content can exhaust tokens and return an empty Cypher.
     return OpenAILLM(
         model_name=s.get("llm_model", "gpt-4o"),
-        model_params={"temperature": 0, "seed": 42},
+        model_params={"temperature": 0, "seed": 42,
+                      "extra_body": {"thinking": {"type": "disabled"}}},
         api_key=s.get("llm_api_key", ""),
         base_url=s.get("llm_endpoint", "https://api.openai.com/v1") + "/",
     )
@@ -253,8 +256,13 @@ def _wrap_return_apoc(cypher: str) -> str:
     for c in cols:
         if not c:
             continue
+        # Column may be a bare alias (semantic-nl CALL: `child_events`) or a
+        # full expression (nl2cypher: `collect(DISTINCT child) AS children`).
+        alias = c.split()[-1].rstrip(",") if c.strip() else ""
         if c in node_aliases:
             new_cols.append(f"[x IN {c} | {_apoc_map_expr('x')}]")
+        elif alias in node_aliases:
+            new_cols.append(f"[x IN {alias} | {_apoc_map_expr('x')}]")
         elif c in node_vars and c not in all_aliases and not c.startswith("_path_"):
             new_cols.append(_apoc_map_expr(c))
         else:
@@ -519,6 +527,8 @@ def _fix_unnamed_rels(cypher: str) -> str:
 
 async def nl2cypher(question: str) -> dict:
     global _schema_cache, _schema_cache_db
+    import time as _time
+    _t_start = _time.monotonic()
     from datetime import datetime as _dt
     question = f"[Current time: {_dt.now().strftime('%Y-%m-%d %H:%M')}] {question}"
     s = get_all_settings()
@@ -538,11 +548,18 @@ async def nl2cypher(question: str) -> dict:
         driver=sync_driver, llm=llm, neo4j_schema=_schema_cache,
         examples=examples, custom_prompt=custom_prompt, neo4j_database=db,
     )
+    _t_llm_start = _time.monotonic()
     result = await asyncio.to_thread(retriever.search, query_text=question)
+    _t_llm_end = _time.monotonic()
+    print(f"=== [NL] LLM 调用耗时: {_t_llm_end - _t_llm_start:.2f}s ===", flush=True)
     generated_cypher = result.metadata.get("cypher", "")
     generated_cypher = _fix_unnamed_rels(generated_cypher)
     from database import conn_manager
+    _t_cypher_start = _time.monotonic()
     records, _ = await conn_manager.run_query(cypher=generated_cypher)
+    _t_cypher_end = _time.monotonic()
+    print(f"=== [NL] Neo4j 查询耗时: {_t_cypher_end - _t_cypher_start:.2f}s ===", flush=True)
+    print(f"=== [NL] 总耗时: {_t_cypher_end - _t_start:.2f}s ===", flush=True)
     return {"generated_cypher": generated_cypher, "records": records or []}
 
 

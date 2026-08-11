@@ -389,6 +389,8 @@ Rules:
 - Use full paths in each CALL, don't split a chain across multiple CALLs
 - RETURN collect(DISTINCT target) AS name for each terminal target
 - The main RETURN only needs the alias names from each CALL's RETURN
+- When mixing multiple OR conditions with AND in WHERE, wrap the OR group in
+  parentheses: (A OR B OR C) AND D
 - Add LIMIT 1000 at the end
 - Only Cypher statement, no markdown"""
 

@@ -158,6 +158,7 @@ async function executeNLQuery(question) {
       return;
     }
     const data = await res.json();
+    // 完整 Cypher 展示在状态栏，靠 StatusBar 的滚动容器查看全文（不覆盖面板）
     if (data.nodes.length === 0 && data.relationships.length === 0) {
       status.type = "info";
       status.message = `查询成功，但未找到匹配的图谱数据。生成的Cypher: ${data.generated_cypher}`;

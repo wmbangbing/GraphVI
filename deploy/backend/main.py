@@ -147,6 +147,11 @@ def _parse_graph_data(records: list) -> GraphResponse:
         if value is None:
             return
         if hasattr(value, "labels") and hasattr(value, "element_id"):
+            # Skip stub nodes (relationship endpoints with no labels/props) —
+            # they'd produce empty graph nodes. Node data comes from the APOC
+            # maps (embedding excluded) instead.
+            if not value.labels:
+                return
             node = _extract_node(value)
             if node.id not in nodes_map:
                 nodes_map[node.id] = node
@@ -166,6 +171,19 @@ def _parse_graph_data(records: list) -> GraphResponse:
                 walk(rel)
             return
         if isinstance(value, dict):
+            # APOC map-format node {id, labels, props} produced by _wrap_return_apoc
+            # (embedding excluded). Must be recognized here or the node is lost.
+            if "props" in value and ("labels" in value or "id" in value):
+                props = _serialize_props(dict(value.get("props") or {}))
+                props.pop("embedding", None)
+                nid = str(value.get("id", ""))
+                labels = list(value.get("labels") or [])
+                if nid and nid not in nodes_map:
+                    caption = (props.get("name") or props.get("title") or props.get("event_name")
+                               or props.get("person_name") or props.get("equipment_name")
+                               or props.get("vehicle_name") or (list(props.values())[0] if props else ""))
+                    nodes_map[nid] = NodeDTO(id=nid, labels=labels, properties=props, caption=str(caption))
+                return
             for v in value.values():
                 walk(v)
         elif isinstance(value, (list, tuple)):
