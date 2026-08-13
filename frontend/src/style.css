@@ -651,6 +651,17 @@ body {
   color: var(--text-muted);
   text-align: center;
 }
+.search-load-more {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--accent, #409eff);
+  text-align: center;
+  cursor: pointer;
+  border-top: 1px solid var(--border-color, #ebeef5);
+}
+.search-load-more:hover {
+  background: var(--hover-bg, #f5f7fa);
+}
 
 /* --- Overlay --- */
 .overlay {

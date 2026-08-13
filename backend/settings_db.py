@@ -42,6 +42,13 @@ def init_settings_table():
         "enable_script_stats": "false",
         "semantic_score_threshold": "0.6",
         "semantic_top_k": "10",
+        "semantic_query_limit": "2000",
+        # --- semantic rerank (问题分解 + 重排) ---
+        "enable_semantic_rerank": "true",
+        "rerank_endpoint": "https://api.siliconflow.cn/v1",
+        "rerank_api_key": "",
+        "rerank_model": "Qwen/Qwen3-Reranker-4B",
+        "rerank_threshold": "0.8",
         # --- auto analyze ---
         "auto_default_strategy": "auto",
         "auto_analyze_prompt": "",

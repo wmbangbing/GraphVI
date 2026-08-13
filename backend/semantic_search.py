@@ -180,6 +180,7 @@ async def semantic_search(question: str, top_k: Optional[int] = None) -> GraphRe
     index_name = s.get("vector_index_name", "entity_vector")
     hops = int(s.get("semantic_query_hops", "1"))
     threshold = float(s.get("semantic_score_threshold", "0.6"))
+    query_limit = int(s.get("semantic_query_limit", "2000"))
     if top_k is None:
         top_k = int(s.get("semantic_top_k", "10"))
     if not index_name:
@@ -193,43 +194,22 @@ async def semantic_search(question: str, top_k: Optional[int] = None) -> GraphRe
         s.get("neo4j_password", ""),
     )
 
-    # 1. Vector search - fetch enough candidates, then filter by score
-    vretriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
-    raw = await asyncio.to_thread(
-        vretriever.get_search_results, query_text=question, top_k=max(top_k, 100)
-    )
-
-    # Filter by score threshold, keep minimum 3 results
-    scored = []
-    for record in raw.records:
-        eid = record.get("elementId")
-        score = record.get("score", 0)
-        if eid and score is not None:
-            scored.append((str(eid), score))
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    print("=== [Semantic scores] ===", flush=True)
-    for eid, s in scored[:10]:
-        print(f"  score={s:.4f} eid={eid[:20]}...", flush=True)
-
-    filtered = [eid for eid, s in scored if s >= threshold]
-    if not filtered and scored:
-        filtered = [scored[0][0]]
-        print(f"  [threshold={threshold} too high, fallback to top-1]", flush=True)
-
-    print(f"  threshold={threshold}, filtered={len(filtered)}, total_candidates={len(scored)}", flush=True)
-    node_ids = filtered[:top_k]
+    # 1. 共享检索入口：问题分解 + 向量检索(retrieval_query) + rerank 精排过滤
+    entries = await _retrieve_entries(question, top_k, threshold)
+    node_ids = [e["eid"] for e in entries if e.get("eid")]
+    print(f"=== [Semantic entries] 检索入口返回 {len(entries)} 个 entry ===", flush=True)
 
     if not node_ids:
         return GraphResponse(nodes=[], relationships=[])
 
     # 2. Traverse from entry nodes with parameterized Cypher
     if hops == 1:
-        traverse = """
+        traverse = f"""
 MATCH (node) WHERE elementId(node) IN $node_ids
 OPTIONAL MATCH (node)-[r]-(related)
 WHERE related IS NOT NULL AND NOT related = node
 RETURN node, collect(DISTINCT r) AS rels, collect(DISTINCT related) AS related_nodes
+LIMIT {query_limit}
 """
     else:
         traverse = f"""
@@ -238,6 +218,7 @@ OPTIONAL MATCH (node)-[r*1..{hops}]-(related)
 WHERE related IS NOT NULL AND NOT related = node
 UNWIND r AS single_rel
 RETURN node, collect(DISTINCT single_rel) AS rels, collect(DISTINCT related) AS related_nodes
+LIMIT {query_limit}
 """
     records, _ = await conn_manager.run_query(cypher=traverse, parameters={"node_ids": node_ids})
     return _parse_records(records if records else [])
@@ -282,6 +263,117 @@ def _inject_entry_labels(cypher: str, entry_labels: list[str]) -> str:
             cypher[m.end():])
 
 
+def _node_full_text(node: dict) -> str:
+    """节点全量属性（排除 embedding）转文本，用于 rerank 相关性判断。"""
+    props = {k: v for k, v in node.items() if k != "embedding"}
+    return json.dumps(props, ensure_ascii=False, default=str)
+
+
+async def analyze_question(question: str) -> str:
+    """LLM 问题分解：提取干净 retrieval_query。关闭开关/失败时返回原始问题。"""
+    s = get_all_settings()
+    if s.get("enable_semantic_rerank", "true") != "true":
+        return question
+    from llm_service import _call_llm_async
+    prompt = (
+        "提取用于向量检索的简洁查询语句：聚焦问题的核心实体和主题词，"
+        "必须保留目标实体类型词（如'事件/人员/装备/车辆'，不要去掉），"
+        "只去掉查询指令词（查询/查找/返回等）和无关的资源描述（如'事件下的物资装备车辆'）。"
+        f"只输出查询语句本身，不要解释。\n问题: {question}\n查询语句:"
+    )
+    try:
+        raw = await _call_llm_async(prompt, temperature=0, max_tokens=100)
+        raw = raw.strip().strip('"').strip("'").strip()
+        return raw if raw else question
+    except Exception:
+        return question
+
+
+async def rerank_filter(candidates: list, question: str) -> list:
+    """Qwen3-Reranker 精排 + 阈值过滤（按 rerank 分数降序）。
+    关闭开关/未配置/失败时返回原候选。"""
+    s = get_all_settings()
+    if s.get("enable_semantic_rerank", "true") != "true":
+        return candidates
+    endpoint = s.get("rerank_endpoint", "").rstrip("/")
+    api_key = s.get("rerank_api_key", "")
+    model = s.get("rerank_model", "Qwen/Qwen3-Reranker-4B")
+    threshold = float(s.get("rerank_threshold", "0.8"))
+    if not endpoint or not api_key or not candidates:
+        return candidates
+    try:
+        client = _get_embed_client(endpoint, api_key)
+        documents = [_node_full_text(c["node"]) for c in candidates]
+
+        def _call_rerank():
+            resp = client.post(
+                f"{endpoint}/rerank",
+                json={"model": model, "query": question,
+                      "documents": documents, "top_n": len(documents)},
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            return [(item["index"], item.get("relevance_score", 0))
+                    for item in resp.json().get("results", [])]
+
+        reranked = await asyncio.to_thread(_call_rerank)
+        kept = [candidates[i] for i, score in reranked if score >= threshold]
+        return kept if kept else candidates
+    except Exception:
+        return candidates
+
+
+async def _retrieve_entries(question: str, top_k: int, threshold: float) -> list:
+    """共享检索入口：问题分解 → 向量检索(retrieval_query) → rerank 精排+阈值过滤。
+    返回 [{node: dict, score: float}, ...]（按 rerank 分数降序，最多 top_k 个）。"""
+    import time as _time
+    _t0 = _time.monotonic()
+    s = get_all_settings()
+    uri = s.get("neo4j_uri", "bolt://localhost:7687")
+    user = s.get("neo4j_username", "neo4j")
+    pwd = s.get("neo4j_password", "")
+    index_name = s.get("vector_index_name", "entity_vector")
+    from nl2cypher import _get_cached_driver
+    embedder = _get_embedder()
+    driver = _get_cached_driver(uri, user, pwd)
+
+    # 1. 问题分解 → 干净 retrieval_query
+    retrieval_query = await analyze_question(question)
+    _t1 = _time.monotonic()
+    print(f"=== [Retrieve] 问题分解: {_t1 - _t0:.2f}s → query='{retrieval_query}' ===", flush=True)
+
+    # 2. 向量检索（top_k 直接控制候选数量）
+    retriever = VectorRetriever(driver=driver, index_name=index_name, embedder=embedder)
+    raw = await asyncio.to_thread(
+        retriever.get_search_results, query_text=retrieval_query, top_k=top_k
+    )
+    _t2 = _time.monotonic()
+
+    # 3. 收集候选（node dict + labels + elementId）
+    candidates = []
+    for rec in raw.records:
+        node = rec.get("node", {})
+        if isinstance(node, dict) and node:
+            candidates.append({"node": node, "score": rec.get("score", 0),
+                               "labels": list(rec.get("nodeLabels", [])),
+                               "eid": rec.get("elementId", "")})
+    candidates.sort(key=lambda x: x["score"], reverse=True)
+    print(f"=== [Retrieve] 向量检索: {_t2 - _t1:.2f}s, 候选 {len(candidates)} 个 ===", flush=True)
+
+    # 4. 向量分数基础过滤（threshold 兜底）
+    passed = [c for c in candidates if c["score"] >= threshold]
+    if not passed and candidates:
+        passed = [candidates[0]]
+    print(f"=== [Retrieve] 向量阈值过滤: {len(passed)}/{len(candidates)} (threshold={threshold}) ===", flush=True)
+
+    # 5. rerank 精排 + 阈值过滤
+    kept = await rerank_filter(passed, question)
+    _t3 = _time.monotonic()
+    print(f"=== [Retrieve] rerank+过滤: {_t3 - _t2:.2f}s, entry {len(kept)} 个 ===", flush=True)
+
+    return kept[:top_k]
+
+
 async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tuple[GraphResponse, str]:
     """Vector search �?LLM generates traversal Cypher �?execute.
 
@@ -302,27 +394,12 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
     from nl2cypher import _get_cached_driver
     sync_driver = _get_cached_driver(uri, user, pwd)
 
-    # 1. Vector search with score threshold
+    # 1. 共享检索入口：问题分解 + 向量检索(retrieval_query) + rerank 精排过滤
     threshold = float(s.get("semantic_score_threshold", "0.6"))
-    retriever = VectorRetriever(driver=sync_driver, index_name=index_name, embedder=embedder)
-    raw = await asyncio.to_thread(
-        retriever.get_search_results, query_text=question, top_k=max(top_k, 100)
-    )
-
-    # Filter by score threshold
-    scored = []
-    for rec in raw.records:
-        eid = rec.get("elementId")
-        score = rec.get("score", 0)
-        node = rec.get("node", {})
-        node_labels = rec.get("nodeLabels", [])
-        if eid and isinstance(node, dict) and node:
-            scored.append((str(eid), score, node, node_labels))
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    filtered_records = [r for r in scored if r[1] >= threshold]
-    if not filtered_records and scored:
-        filtered_records = [scored[0]]
+    entries = await _retrieve_entries(question, top_k, threshold)
+    scored = [(str(e["node"].get("id", "")), e["score"], e["node"], e["labels"])
+              for e in entries]
+    filtered_records = scored
 
     # 2. Build entry node context
     # Use the node's `id` property (UUID, RANGE-indexed) for querying, not elementId.
@@ -345,6 +422,7 @@ async def semantic_nl_search(question: str, top_k: Optional[int] = None) -> tupl
     node_id_list = json.dumps(node_ids)
 
     # 4. Build prompt
+    query_limit = int(s.get("semantic_query_limit", "2000"))
     prompt = f"""Task: Write a Cypher query that starts from specific entry nodes and traverses ONLY the relationships needed to answer the user question.
 
 Schema:
@@ -378,7 +456,7 @@ Structure:
     RETURN collect(DISTINCT target) AS name
   }}
   RETURN name
-  LIMIT 1000
+  LIMIT {query_limit}
 
 Rules:
 - Start with: MATCH (entry) WHERE entry.id IN {node_id_list}
@@ -391,7 +469,7 @@ Rules:
 - The main RETURN only needs the alias names from each CALL's RETURN
 - When mixing multiple OR conditions with AND in WHERE, wrap the OR group in
   parentheses: (A OR B OR C) AND D
-- Add LIMIT 1000 at the end
+- Add LIMIT {query_limit} at the end
 - Only Cypher statement, no markdown"""
 
     from llm_service import _call_llm_async

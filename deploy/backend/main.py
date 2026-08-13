@@ -447,6 +447,44 @@ async def semantic_test(body: dict | None = None):
         raise HTTPException(status_code=400, detail=f"语义检索测试失败: {msg}")
 
 
+@app.post("/api/test-rerank")
+async def test_rerank(body: dict | None = None):
+    """Test rerank API connectivity（POST {endpoint}/rerank 简单调用）。"""
+    try:
+        overrides = body or {}
+        from backend.settings_db import get_all_settings
+        endpoint = overrides.get("rerank_endpoint") or get_all_settings().get(
+            "rerank_endpoint", "https://api.siliconflow.cn/v1")
+        api_key = overrides.get("rerank_api_key") or get_all_settings().get("rerank_api_key", "")
+        model = overrides.get("rerank_model") or get_all_settings().get(
+            "rerank_model", "Qwen/Qwen3-Reranker-4B")
+        if not api_key:
+            raise ValueError("Rerank API Key 未配置")
+        import httpx as _httpx
+        _r = _httpx.post(
+            endpoint.rstrip("/") + "/rerank",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            },
+            json={"model": model, "query": "test", "documents": ["test document"], "top_n": 1},
+            timeout=30,
+        )
+        _r.raise_for_status()
+        _data = _r.json()
+        return {"status": "ok", "detail": f"Rerank API 连接成功，模型 {model}", "model": model}
+    except Exception as e:
+        msg = str(e)
+        if "401" in msg or "unauthorized" in msg.lower() or "auth" in msg.lower():
+            msg = "API Key 无效或权限不足"
+        elif "404" in msg or "not found" in msg.lower():
+            msg = "模型不存在或 API 地址错误"
+        elif "connect" in msg.lower() or "timeout" in msg.lower():
+            msg = "无法连接到 API 地址，请检查网络"
+        raise HTTPException(status_code=400, detail=f"重排序模型测试失败: {msg}")
+
+
 @app.post("/api/query/semantic-nl", response_model=SemanticNLQueryResponse)
 async def semantic_nl_query(body: SemanticNLQueryRequest):
     if not body.question or not body.question.strip():

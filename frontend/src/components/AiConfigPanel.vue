@@ -19,6 +19,12 @@ const config = ref({
   semantic_query_hops: 1,
   semantic_score_threshold: 0.6,
   semantic_top_k: 10,
+  semantic_query_limit: 2000,
+  enable_semantic_rerank: "true",
+  rerank_endpoint: "https://api.siliconflow.cn/v1",
+  rerank_api_key: "",
+  rerank_model: "Qwen/Qwen3-Reranker-4B",
+  rerank_threshold: 0.8,
   enable_script_stats: "false",
   auto_default_strategy: "auto",
   auto_analyze_prompt: "",
@@ -34,6 +40,8 @@ const testing = ref(false);
 const testResult = ref(null);
 const semanticTesting = ref(false);
 const semanticTestResult = ref(null);
+const rerankTesting = ref(false);
+const rerankTestResult = ref(null);
 
 // Schema config
 const schemaAllTypes = ref({ node_types: [], rel_types: [] });
@@ -134,6 +142,12 @@ async function fetchSettings() {
       semantic_query_hops: Number(data.semantic_query_hops) || 1,
       semantic_score_threshold: Number(data.semantic_score_threshold) || 0.6,
       semantic_top_k: Number(data.semantic_top_k) || 10,
+      semantic_query_limit: Number(data.semantic_query_limit) || 2000,
+      enable_semantic_rerank: data.enable_semantic_rerank ?? "true",
+      rerank_endpoint: data.rerank_endpoint || "https://api.siliconflow.cn/v1",
+      rerank_api_key: data.rerank_api_key || "",
+      rerank_model: data.rerank_model || "Qwen/Qwen3-Reranker-4B",
+      rerank_threshold: Number(data.rerank_threshold) || 0.8,
       enable_script_stats: data.enable_script_stats || "false",
       auto_default_strategy: data.auto_default_strategy || "auto",
       auto_analyze_prompt: data.auto_analyze_prompt || "",
@@ -209,6 +223,33 @@ async function testSemantic() {
     semanticTestResult.value = { ok: false, message: `网络错误: ${e.message}` };
   } finally {
     semanticTesting.value = false;
+  }
+}
+
+async function testRerank() {
+  rerankTesting.value = true;
+  rerankTestResult.value = null;
+  try {
+    const res = await fetch(apiUrl("/api/test-rerank"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rerank_endpoint: config.value.rerank_endpoint,
+        rerank_api_key: config.value.rerank_api_key,
+        rerank_model: config.value.rerank_model,
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      rerankTestResult.value = { ok: true, message: data.detail || "测试通过" };
+    } else {
+      const err = await res.json();
+      rerankTestResult.value = { ok: false, message: err.detail || "测试失败" };
+    }
+  } catch (e) {
+    rerankTestResult.value = { ok: false, message: `网络错误: ${e.message}` };
+  } finally {
+    rerankTesting.value = false;
   }
 }
 
@@ -324,10 +365,41 @@ onMounted(fetchSettings);
         <el-form-item label="最多返回">
           <el-input-number v-model="config.semantic_top_k" :min="1" :max="200" size="small" />
         </el-form-item>
+        <el-form-item label="查询 LIMIT">
+          <el-input-number v-model="config.semantic_query_limit" :min="100" :max="10000" :step="100" size="small" />
+        </el-form-item>
       </el-form>
       <el-button size="small" :loading="semanticTesting" @click="testSemantic">测试向量检索</el-button>
       <div v-if="semanticTestResult" class="test-result" :class="{ success: semanticTestResult.ok, error: !semanticTestResult.ok }">
         {{ semanticTestResult.message }}
+      </div>
+    </div>
+
+    <div class="config-section">
+      <h3 class="config-section-title">重排序（Rerank）</h3>
+      <p class="config-section-desc">
+        语义/语义NL/auto 接口的入口精排与过滤，提高检索准确性
+      </p>
+      <el-form label-position="top" size="small">
+        <el-form-item label="启用重排序">
+          <el-switch v-model="config.enable_semantic_rerank" active-value="true" inactive-value="false" />
+        </el-form-item>
+        <el-form-item label="Rerank API 地址">
+          <el-input v-model="config.rerank_endpoint" placeholder="https://api.siliconflow.cn/v1" />
+        </el-form-item>
+        <el-form-item label="API Key">
+          <el-input v-model="config.rerank_api_key" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="模型">
+          <el-input v-model="config.rerank_model" placeholder="Qwen/Qwen3-Reranker-4B" />
+        </el-form-item>
+        <el-form-item label="过滤阈值">
+          <el-input-number v-model="config.rerank_threshold" :min="0" :max="1" :step="0.05" size="small" />
+        </el-form-item>
+      </el-form>
+      <el-button size="small" :loading="rerankTesting" @click="testRerank">测试重排模型</el-button>
+      <div v-if="rerankTestResult" class="test-result" :class="{ success: rerankTestResult.ok, error: !rerankTestResult.ok }">
+        {{ rerankTestResult.message }}
       </div>
     </div>
 

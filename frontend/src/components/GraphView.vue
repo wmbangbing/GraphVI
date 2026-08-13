@@ -194,6 +194,7 @@ function forceRender2D() {
 }
 
 // ─── Search ───────────────────────────────────────────────────────────────────
+const searchVisibleCount = ref(20);
 const searchResults = computed(() => {
   if (!searchQuery.value || !graphInstance) return [];
   const q = searchQuery.value.toLowerCase();
@@ -201,8 +202,21 @@ const searchResults = computed(() => {
   if (!data?.nodes) return [];
   return data.nodes
     .filter((n) => n.name && n.name.toLowerCase().includes(q))
-    .slice(0, 20);
+    .slice(0, searchVisibleCount.value);
 });
+const totalSearchMatches = computed(() => {
+  if (!searchQuery.value || !graphInstance) return 0;
+  const q = searchQuery.value.toLowerCase();
+  const data = graphInstance.graphData();
+  if (!data?.nodes) return 0;
+  return data.nodes.filter((n) => n.name && n.name.toLowerCase().includes(q)).length;
+});
+watch(searchQuery, () => {
+  searchVisibleCount.value = 20;
+});
+function loadMoreSearch() {
+  searchVisibleCount.value += 20;
+}
 
 function focusNode(node) {
   if (!graphInstance || !node || !Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
@@ -807,6 +821,13 @@ document.addEventListener("fullscreenchange", () => {
         >
           <span class="search-result-name">{{ n.name }}</span>
           <span class="search-result-label">{{ primaryLabel(n.labels) }}</span>
+        </div>
+        <div
+          v-if="searchResults.length < totalSearchMatches"
+          class="search-load-more"
+          @click="loadMoreSearch"
+        >
+          加载更多（{{ searchResults.length }}/{{ totalSearchMatches }}）
         </div>
       </div>
       <div v-else-if="searchQuery && searchResults.length === 0" class="search-results">
